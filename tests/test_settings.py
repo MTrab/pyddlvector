@@ -46,16 +46,45 @@ def test_fetch_master_volume_from_robot_settings_jdoc_int_value() -> None:
     assert volume == "medium_low"
 
 
-def test_update_master_volume_uses_update_settings_rpc() -> None:
+def test_update_master_volume_uses_set_master_volume_rpc() -> None:
     class FakeClient:
         class Stub:
             pass
 
         def __init__(self) -> None:
             self.stub = self.Stub()
+            self.calls: list[str] = []
 
         async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
             del kwargs
+            self.calls.append(method_name)
+            assert method_name == "SetMasterVolume"
+            assert request.volume_level == 3
+
+            class FakeResponse:
+                pass
+
+            return FakeResponse()
+
+    selected = asyncio.run(update_master_volume(FakeClient(), "medium_high", timeout=5))
+    assert selected == "medium_high"
+
+
+def test_update_master_volume_falls_back_to_update_settings() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.calls: list[str] = []
+
+        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            self.calls.append(method_name)
+            if method_name == "SetMasterVolume":
+                raise VectorProtocolError("Stub does not expose RPC method 'SetMasterVolume'")
+
             assert method_name == "UpdateSettings"
             assert request.settings.master_volume == 4
 
@@ -64,5 +93,33 @@ def test_update_master_volume_uses_update_settings_rpc() -> None:
 
             return FakeResponse()
 
-    selected = asyncio.run(update_master_volume(FakeClient(), "medium_high", timeout=5))
+    client = FakeClient()
+    selected = asyncio.run(update_master_volume(client, "medium_high", timeout=5))
     assert selected == "medium_high"
+    assert client.calls == ["SetMasterVolume", "UpdateSettings"]
+
+
+def test_update_master_volume_mute_uses_update_settings_directly() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.calls: list[str] = []
+
+        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            self.calls.append(method_name)
+            assert method_name == "UpdateSettings"
+            assert request.settings.master_volume == 0
+
+            class FakeResponse:
+                code = 0
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_master_volume(client, "mute", timeout=5))
+    assert selected == "mute"
+    assert client.calls == ["UpdateSettings"]

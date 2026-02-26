@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 from .client import VectorClient
-from .exceptions import VectorProtocolError
+from .exceptions import VectorProtocolError, VectorRPCError
 from .messaging import protocol
 
 _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
@@ -94,6 +94,40 @@ async def update_master_volume(
     """Update robot master volume and return canonical selected option."""
     normalized = normalize_master_volume(value)
 
+    if normalized == "mute":
+        return await _update_master_volume_via_update_settings(client, normalized, timeout=timeout)
+
+    try:
+        return await _update_master_volume_via_set_master_volume(
+            client,
+            normalized,
+            timeout=timeout,
+        )
+    except (VectorProtocolError, VectorRPCError) as err:
+        if not _should_fallback_to_update_settings(err):
+            raise
+        return await _update_master_volume_via_update_settings(client, normalized, timeout=timeout)
+
+
+async def _update_master_volume_via_set_master_volume(
+    client: VectorClient[Any],
+    normalized: str,
+    *,
+    timeout: float | None = None,
+) -> str:
+    request = protocol.MasterVolumeRequest(
+        volume_level=protocol.MasterVolumeLevel.Value(f"VOLUME_{normalized.upper()}"),
+    )
+    await client.rpc("SetMasterVolume", request, timeout=timeout)
+    return normalized
+
+
+async def _update_master_volume_via_update_settings(
+    client: VectorClient[Any],
+    normalized: str,
+    *,
+    timeout: float | None = None,
+) -> str:
     request = protocol.UpdateSettingsRequest(
         settings=protocol.RobotSettingsConfig(
             master_volume=protocol.Volume.Value(normalized.upper()),
@@ -107,3 +141,11 @@ async def update_master_volume(
         raise VectorProtocolError(f"Volume update was not accepted by robot: code={response_code}")
 
     return normalized
+
+
+def _should_fallback_to_update_settings(err: VectorProtocolError | VectorRPCError) -> bool:
+    if isinstance(err, VectorProtocolError):
+        return True
+
+    status_code = getattr(err, "status_code", None)
+    return str(status_code) == "StatusCode.UNIMPLEMENTED"
