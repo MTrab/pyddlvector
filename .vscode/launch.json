@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "pyddlvector: Example (wirepod)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--mode",
+        "wirepod"
+      ]
+    },
+    {
+      "name": "pyddlvector: Example (official)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": [
+        "--mode",
+        "official"
+      ],
+      "env": {
+        "VECTOR_EMAIL": "",
+        "VECTOR_PASSWORD": ""
+      }
+    }
+  ]
+}
