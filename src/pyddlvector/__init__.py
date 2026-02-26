@@ -24,6 +24,7 @@ from .provisioning import (
     fetch_official_session_token,
     provision_runtime_robot,
 )
+from .statistics import RobotStatistics, fetch_lifetime_statistics
 
 __all__ = [
     "RobotConfig",
@@ -43,8 +44,10 @@ __all__ = [
     "fetch_cert_for_wirepod_serial",
     "fetch_cert_from_robot_tls",
     "fetch_official_session_token",
+    "fetch_lifetime_statistics",
     "messaging",
     "provision_runtime_robot",
+    "RobotStatistics",
 ]
 
 
