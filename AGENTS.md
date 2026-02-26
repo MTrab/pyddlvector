@@ -41,6 +41,14 @@ Reference does NOT mean:
 - The module must remain compatible with Home Assistant usage patterns.
 - Public APIs should be stable, typed, and suitable for long-term integration use.
 
+## Build and Quality Tooling
+
+- Use `poetry` as the build and dependency management tool.
+- Use `pytest` for automated tests.
+- Use `ruff` as the formatter and linter.
+
+The agent should keep project configuration aligned with these tools and run relevant checks when changing code.
+
 ---
 
 ## Async-First Requirement
