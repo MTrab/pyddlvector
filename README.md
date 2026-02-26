@@ -91,3 +91,20 @@ asyncio.run(main())
 - This package intentionally stays Home Assistant agnostic in core client logic.
 - In some container/remote environments, `*.local` mDNS hostnames (for example `escapepod.local`)
   do not resolve. Use a direct `wirepod_url` IP like `http://192.168.1.50:8080` in those setups.
+
+## Development linting
+
+This repository uses `ruff` for formatting and linting.
+
+Install git hooks:
+
+```bash
+python3 -m pip install pre-commit
+pre-commit install
+```
+
+Run hooks on all files:
+
+```bash
+pre-commit run --all-files
+```
