@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "pyddlvector: Example (wirepod)",
+      "type": "python",
+      "request": "launch",
+      "module": "poetry",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "subProcess": true,
+      "justMyCode": true,
+      "args": [
+        "run",
+        "python",
+        "examples/connect_vector_t3x9.py",
+        "--mode",
+        "wirepod"
+      ]
+    },
+    {
+      "name": "pyddlvector: Example (official)",
+      "type": "python",
+      "request": "launch",
+      "module": "poetry",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "subProcess": true,
+      "justMyCode": true,
+      "args": [
+        "run",
+        "python",
+        "examples/connect_vector_t3x9.py",
+        "--mode",
+        "official"
+      ],
+      "env": {
+        "VECTOR_EMAIL": "",
+        "VECTOR_PASSWORD": ""
+      }
+    }
+  ]
+}

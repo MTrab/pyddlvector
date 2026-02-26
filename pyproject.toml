@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "pyddlvector"
+version = "0.1.0"
+description = "Async-first Python client foundation for Vector robot communication"
+authors = ["Home Assistant Contributors"]
+readme = "README.md"
+packages = [{ include = "pyddlvector", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+grpcio = "^1.74.0"
+httpx = "^0.28.1"
+protobuf = "^5.29.3"
+googleapis-common-protos = "^1.70.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+pytest-asyncio = "^0.25.3"
+ruff = "^0.11.0"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = ["src/pyddlvector/messaging"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "ASYNC", "B"]
+ignore = ["ASYNC109"]
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
