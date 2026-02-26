@@ -10,6 +10,7 @@ from pyddlvector import VectorClient, messaging, provision_runtime_robot
 
 DEFAULT_NAME = "Vector-T3X9"
 DEFAULT_SERIAL = "00908e7e"
+# DEFAULT_SERIAL = "00608f75"
 DEFAULT_IP = "192.168.1.201"
 DEFAULT_WIREPOD_URL = "http://escapepod.local:8080"
 
@@ -25,6 +26,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wirepod-url", default=DEFAULT_WIREPOD_URL)
     parser.add_argument("--timeout", type=float, default=10.0)
     return parser.parse_args()
+
+
+def _battery_level_name(level_value: int) -> str:
+    try:
+        return messaging.protocol.BatteryLevel.Name(level_value)
+    except ValueError:
+        return f"UNKNOWN({level_value})"
+
+
+def _describe_robot_activity(robot_state: object) -> str:
+    left_speed = abs(getattr(robot_state, "left_wheel_speed_mmps", 0.0))
+    right_speed = abs(getattr(robot_state, "right_wheel_speed_mmps", 0.0))
+    is_moving = (left_speed + right_speed) > 1.0
+
+    touch_data = getattr(robot_state, "touch_data", None)
+    being_touched = bool(getattr(touch_data, "is_being_touched", False))
+
+    carrying_object_id = int(getattr(robot_state, "carrying_object_id", -1))
+    is_carrying_object = carrying_object_id >= 0
+
+    if is_moving:
+        return "Moving around"
+    if being_touched:
+        return "Being touched"
+    if is_carrying_object:
+        return "Standing still while carrying an object"
+    return "Idle / standing still"
+
+
+async def _read_current_robot_activity(
+    client: VectorClient,
+    *,
+    timeout: float,
+) -> str:
+    stream = client.stub.EventStream(messaging.protocol.EventRequest(), timeout=timeout)
+    try:
+        for _ in range(10):
+            event_response = await asyncio.wait_for(stream.read(), timeout=timeout)
+            if event_response is None or not event_response.HasField("event"):
+                continue
+
+            event_type = event_response.event.WhichOneof("event_type")
+            if event_type == "robot_state":
+                return _describe_robot_activity(event_response.event.robot_state)
+        return "Unknown (no robot_state event received)"
+    except TimeoutError:
+        return "Unknown (timed out waiting for robot_state)"
+    finally:
+        stream.cancel()
 
 
 async def main() -> int:
@@ -76,6 +126,24 @@ async def main() -> int:
         print("Serial:", robot.serial)
         print("Host version:", getattr(response, "host_version", "<unknown>"))
         print("Local client:", socket.gethostname())
+
+        battery_response = await client.rpc(
+            "BatteryState",
+            messaging.protocol.BatteryStateRequest(),
+            timeout=args.timeout,
+        )
+        battery_level = int(getattr(battery_response, "battery_level", 0))
+        battery_volts = float(getattr(battery_response, "battery_volts", 0.0))
+        is_charging = bool(getattr(battery_response, "is_charging", False))
+        on_charger = bool(getattr(battery_response, "is_on_charger_platform", False))
+
+        activity = await _read_current_robot_activity(client, timeout=args.timeout)
+
+        print("Battery level:", _battery_level_name(battery_level))
+        print("Battery volts:", f"{battery_volts:.2f}V")
+        print("Charging:", "yes" if is_charging else "no")
+        print("On charger:", "yes" if on_charger else "no")
+        print("Current activity:", activity)
     finally:
         await client.disconnect()
 
