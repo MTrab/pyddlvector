@@ -196,3 +196,48 @@ async def test_provision_runtime_robot_requires_official_credentials() -> None:
                 "client_name": client_name,
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_wirepod_falls_back_to_robot_tls_when_url_fetch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failing_wirepod_fetch(
+        serial: str,
+        *,
+        wirepod_url: str,
+        timeout: float = 10.0,
+    ) -> bytes:
+        del serial, wirepod_url, timeout
+        raise VectorProvisioningError("wirepod fetch failed")
+
+    async def tls_cert(ip: str, *, timeout: float = 10.0, port: int = 443) -> bytes:
+        del ip, timeout, port
+        return b"tls-cert"
+
+    async def fake_guid(**kwargs: Any) -> str:
+        del kwargs
+        return "guid-from-rpc"
+
+    monkeypatch.setattr(
+        "pyddlvector.provisioning.fetch_cert_for_wirepod_serial",
+        failing_wirepod_fetch,
+    )
+    monkeypatch.setattr("pyddlvector.provisioning.fetch_cert_from_robot_tls", tls_cert)
+    monkeypatch.setattr("pyddlvector.provisioning.authenticate_robot_guid", fake_guid)
+
+    config = await provision_runtime_robot(
+        mode="wirepod",
+        name="Vector-T3X9",
+        ip="192.168.1.201",
+        serial="00908e7e",
+        wirepod_url="http://escapepod.local:8080",
+        stub_factory=lambda ch: object(),
+        request_factory=lambda session_id, client_name: {
+            "user_session_id": session_id,
+            "client_name": client_name,
+        },
+    )
+
+    assert config.cert_pem == b"tls-cert"
+    assert config.guid == "guid-from-rpc"

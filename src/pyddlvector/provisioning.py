@@ -94,7 +94,7 @@ async def fetch_cert_from_url(url: str, *, timeout: float = 10.0) -> bytes:
     except httpx.TimeoutException as err:
         raise VectorTimeoutError(f"Timed out downloading cert from {url}") from err
     except httpx.HTTPError as err:
-        raise VectorProvisioningError(f"Failed to download cert from {url}") from err
+        raise VectorProvisioningError(f"Failed to download cert from {url}: {err}") from err
 
     if not response.content:
         raise VectorProvisioningError(f"Empty cert payload received from {url}")
@@ -213,11 +213,16 @@ async def provision_runtime_robot(
         )
     elif normalized_mode == "wirepod":
         if wirepod_url and serial:
-            cert_pem = await fetch_cert_for_wirepod_serial(
-                serial,
-                wirepod_url=wirepod_url,
-                timeout=timeout,
-            )
+            try:
+                cert_pem = await fetch_cert_for_wirepod_serial(
+                    serial,
+                    wirepod_url=wirepod_url,
+                    timeout=timeout,
+                )
+            except (VectorProvisioningError, VectorTimeoutError):
+                # mDNS hostnames (e.g. *.local) often fail in containerized/remote environments.
+                # Fall back to reading the robot's certificate directly from its TLS endpoint.
+                cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
         else:
             cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
         resolved_session_id = session_id or "Anything1"

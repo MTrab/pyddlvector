@@ -89,3 +89,5 @@ asyncio.run(main())
 - Connection model follows Vector SDK behavior: pinned robot certificate + guid access token.
 - `sdk_config.ini` is optional; runtime injection works directly for Home Assistant config entries.
 - This package intentionally stays Home Assistant agnostic in core client logic.
+- In some container/remote environments, `*.local` mDNS hostnames (for example `escapepod.local`)
+  do not resolve. Use a direct `wirepod_url` IP like `http://192.168.1.50:8080` in those setups.
