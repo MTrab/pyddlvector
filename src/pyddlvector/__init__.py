@@ -3,6 +3,7 @@
 from importlib import import_module
 from typing import Any
 
+from .camera import CameraFrame, extract_camera_frame
 from .client import VectorClient
 from .config import RobotConfig, SdkConfigStore
 from .exceptions import (
@@ -33,6 +34,7 @@ __all__ = [
     "SdkConfigStore",
     "VectorClient",
     "VectorFleet",
+    "CameraFrame",
     "VectorAuthenticationError",
     "VectorConfigurationError",
     "VectorConnectionError",
@@ -45,6 +47,7 @@ __all__ = [
     "fetch_cert_for_official_serial",
     "fetch_cert_for_wirepod_serial",
     "fetch_cert_from_robot_tls",
+    "extract_camera_frame",
     "fetch_official_session_token",
     "fetch_lifetime_statistics",
     "fetch_master_volume",
