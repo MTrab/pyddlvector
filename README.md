@@ -1,18 +1,69 @@
 # pyddlvector
 
-Async-first Python module for communicating with Vector robots over authenticated gRPC.
+Async-first Python communication module for Digital Dream Labs / Anki Vector.
 
-## What This Provides
+`pyddlvector` is designed as a reusable transport/client layer that Home Assistant can consume, while keeping Home Assistant-specific logic outside the core package.
 
-- `RobotConfig.from_runtime(...)`: build robot config from runtime values
-- `SdkConfigStore`: optional loader from `~/.anki_vector/sdk_config.ini`
-- `VectorClient`: async TLS + token authenticated gRPC client per robot
-- `VectorFleet`: multi-robot lifecycle and client cache
-- `provision_runtime_robot(...)`: runtime provisioning for `official` and `wirepod`
-- `pyddlvector.messaging`: bundled protobuf + gRPC stubs (no external SDK required)
-- typed, integration-friendly exception model
+## Goals
 
-## Quick Start (Home Assistant Runtime Style)
+- Async-first robot communication APIs
+- Deterministic connection lifecycle with explicit timeouts
+- Typed, actionable exceptions for integration consumers
+- Runtime provisioning support (`wirepod` and `official`)
+- Bundled protobuf/gRPC messaging modules (`pyddlvector.messaging`)
+
+## Python and Tooling
+
+- Python: `3.13+`
+- Package manager/build: `poetry`
+- Tests: `pytest`, `pytest-asyncio`
+- Lint/format: `ruff`
+
+## Installation
+
+### From source (development)
+
+```bash
+git clone https://github.com/MTrab/pyddlvector.git
+cd pyddlvector
+poetry install
+```
+
+### In another project
+
+Pinning directly from Git is supported:
+
+```text
+pyddlvector@git+https://github.com/MTrab/pyddlvector.git@main
+```
+
+## Package Layout
+
+- `src/pyddlvector/client.py`: async gRPC client (`VectorClient`)
+- `src/pyddlvector/config.py`: robot config model and optional SDK INI loader
+- `src/pyddlvector/fleet.py`: multi-robot lifecycle helper
+- `src/pyddlvector/provisioning.py`: runtime provisioning flow
+- `src/pyddlvector/settings.py`: settings parsing + master volume utilities
+- `src/pyddlvector/statistics.py`: lifetime statistics parsing
+- `src/pyddlvector/stimulation.py`: stimulation payload parsing
+- `src/pyddlvector/camera.py`: camera frame extraction helper
+- `src/pyddlvector/messaging/`: bundled generated protobuf + gRPC stubs
+
+## Public API Snapshot
+
+Imported from `pyddlvector` top-level:
+
+- `RobotConfig`, `SdkConfigStore`
+- `VectorClient`, `VectorFleet`
+- `provision_runtime_robot`
+- `fetch_lifetime_statistics`, `parse_lifetime_statistics_jdoc`
+- `fetch_master_volume`, `update_master_volume`, `normalize_master_volume`
+- `parse_stimulation_info`
+- `extract_camera_frame`
+- `messaging`
+- Exception types under `pyddlvector.exceptions`
+
+## Quickstart: Async Client
 
 ```python
 import asyncio
@@ -25,9 +76,8 @@ async def main() -> None:
         serial="00908e7e",
         name="Vector-T3X9",
         ip="192.168.1.201",
-        guid="<GUID_FROM_SETUP>",
+        guid="<GUID>",
         cert_file="/path/to/Vector-T3X9-00908e7e.cert",
-        # Alternative: cert_pem=b"..."
     )
 
     client = VectorClient(
@@ -36,11 +86,10 @@ async def main() -> None:
         default_timeout=10.0,
     )
 
-    await client.connect()
+    await client.connect(timeout=10.0)
     try:
-        # Example: invoke an RPC exposed by your stub.
-        # request = protocol.ProtocolVersionRequest(...)
-        # response = await client.rpc("ProtocolVersion", request)
+        # request = messaging.protocol.BatteryStateRequest()
+        # response = await client.rpc("BatteryState", request, timeout=10.0)
         pass
     finally:
         await client.disconnect()
@@ -49,9 +98,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Runtime Provisioning (No INI File)
-
-You can provision cert + GUID at runtime and get a ready `RobotConfig`.
+## Quickstart: Runtime Provisioning
 
 ```python
 import asyncio
@@ -72,11 +119,12 @@ async def main() -> None:
         name="Vector-T3X9",
         ip="192.168.1.201",
         serial="00908e7e",
-        wirepod_url="http://escapepod.local:8080",  # for wire-pod mode
-        # username="you@example.com",              # required for official mode
-        # password="secret",                       # required for official mode
+        wirepod_url="http://192.168.1.50:8080",  # wirepod mode
+        # username="you@example.com",            # official mode
+        # password="secret",                     # official mode
         stub_factory=lambda channel: messaging.client.ExternalInterfaceStub(channel),
         request_factory=auth_request_factory,
+        timeout=10.0,
     )
     print(robot)
 
@@ -84,27 +132,51 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## Notes
+## Error Model
 
-- Connection model follows Vector SDK behavior: pinned robot certificate + guid access token.
-- `sdk_config.ini` is optional; runtime injection works directly for Home Assistant config entries.
-- This package intentionally stays Home Assistant agnostic in core client logic.
-- In some container/remote environments, `*.local` mDNS hostnames (for example `escapepod.local`)
-  do not resolve. Use a direct `wirepod_url` IP like `http://192.168.1.50:8080` in those setups.
+Core exceptions are mapped into explicit integration-friendly types:
 
-## Development linting
+- `VectorConfigurationError`
+- `VectorConnectionError`
+- `VectorTimeoutError`
+- `VectorProtocolError`
+- `VectorAuthenticationError`
+- `VectorProvisioningError`
+- `VectorRPCError`
 
-This repository uses `ruff` for formatting and linting.
+When consuming this module, prefer handling these types rather than raw transport exceptions.
 
-Install git hooks:
+## Development Workflow
+
+### Run tests
+
+```bash
+poetry run pytest
+```
+
+### Run lint/format checks
+
+```bash
+poetry run ruff check .
+poetry run ruff format .
+```
+
+### Optional pre-commit hooks
 
 ```bash
 python3 -m pip install pre-commit
 pre-commit install
-```
-
-Run hooks on all files:
-
-```bash
 pre-commit run --all-files
 ```
+
+## Integration Notes (Home Assistant)
+
+- Keep Home Assistant-specific behavior out of this package core.
+- Preserve bounded retry loops and explicit timeouts in I/O paths.
+- Avoid leaking secrets/certificates/tokens in logs.
+- Maintain stable typed APIs where possible.
+
+## Limitations and Environment Notes
+
+- mDNS hostnames (for example `*.local`) may fail in some containerized environments.
+- Prefer direct IPs for `wirepod_url` when mDNS resolution is unreliable.
