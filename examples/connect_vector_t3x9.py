@@ -6,7 +6,12 @@ import os
 import socket
 import sys
 
-from pyddlvector import VectorClient, messaging, provision_runtime_robot
+from pyddlvector import (
+    VectorClient,
+    fetch_lifetime_statistics,
+    messaging,
+    provision_runtime_robot,
+)
 
 DEFAULT_NAME = "Vector-T3X9"
 DEFAULT_SERIAL = "00908e7e"
@@ -144,6 +149,13 @@ async def main() -> int:
         print("Charging:", "yes" if is_charging else "no")
         print("On charger:", "yes" if on_charger else "no")
         print("Current activity:", activity)
+
+        stats = await fetch_lifetime_statistics(client, timeout=args.timeout)
+        print("Days alive:", stats.days_alive)
+        print("Reacted to trigger word:", stats.reacted_to_trigger_word, "times")
+        print("Utility features used:", stats.utility_features_used)
+        print("Seconds petted:", stats.seconds_petted)
+        print("Distance moved (cm):", stats.distance_moved_cm)
     finally:
         await client.disconnect()
 

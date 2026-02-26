@@ -140,6 +140,34 @@ class VectorClient(Generic[StubT]):
         except grpc.RpcError as err:
             raise _map_rpc_error(err, getattr(rpc, "__name__", "<rpc>")) from err
 
+    async def unary_unary(
+        self,
+        path: str,
+        request: Any,
+        *,
+        request_serializer: Callable[[Any], bytes],
+        response_deserializer: Callable[[bytes], ResponseT],
+        timeout: float | None = None,
+    ) -> ResponseT:
+        """Invoke a unary gRPC endpoint by fully-qualified RPC path."""
+        if not self.connected or self._channel is None:
+            raise VectorConnectionError("Client is not connected")
+
+        effective_timeout = timeout if timeout is not None else self._default_timeout
+        rpc = self._channel.unary_unary(
+            path,
+            request_serializer=request_serializer,
+            response_deserializer=response_deserializer,
+        )
+        try:
+            return await rpc(request, timeout=effective_timeout)
+        except TimeoutError as err:
+            raise VectorTimeoutError(
+                f"RPC '{path}' timed out after {effective_timeout:.2f}s"
+            ) from err
+        except grpc.RpcError as err:
+            raise _map_rpc_error(err, path) from err
+
 
 def _map_rpc_error(
     error: grpc.RpcError,
