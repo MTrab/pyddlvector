@@ -5,11 +5,15 @@
       "name": "pyddlvector: Example (wirepod)",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
+      "module": "poetry",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "subProcess": true,
       "justMyCode": true,
       "args": [
+        "run",
+        "python",
+        "examples/connect_vector_t3x9.py",
         "--mode",
         "wirepod"
       ]
@@ -18,11 +22,15 @@
       "name": "pyddlvector: Example (official)",
       "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
+      "module": "poetry",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "subProcess": true,
       "justMyCode": true,
       "args": [
+        "run",
+        "python",
+        "examples/connect_vector_t3x9.py",
         "--mode",
         "official"
       ],

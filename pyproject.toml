@@ -11,6 +11,7 @@ python = "^3.13"
 grpcio = "^1.74.0"
 httpx = "^0.28.1"
 protobuf = "^5.29.3"
+googleapis-common-protos = "^1.70.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
