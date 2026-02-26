@@ -174,6 +174,8 @@ async def authenticate_robot_guid(
     guid = getattr(response, "client_token_guid", None)
     if not guid:
         raise VectorAuthenticationError("Robot auth response did not include a GUID token")
+    if isinstance(guid, bytes):
+        return guid.decode("utf-8")
     return str(guid)
 
 

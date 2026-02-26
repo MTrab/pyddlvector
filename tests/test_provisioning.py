@@ -78,6 +78,17 @@ class _AuthStub:
         return _AuthResponse(self._guid)
 
 
+class _AuthStubBytes:
+    async def UserAuthentication(
+        self,
+        request: dict[str, str],
+        *,
+        timeout: float | None = None,
+    ) -> _AuthResponse:
+        del request, timeout
+        return _AuthResponse(b"guid-bytes-123")
+
+
 def _patch_grpc(monkeypatch: pytest.MonkeyPatch, channel: _FakeChannel) -> None:
     monkeypatch.setattr(
         "pyddlvector.provisioning.grpc.ssl_channel_credentials",
@@ -116,6 +127,28 @@ async def test_authenticate_robot_guid_success(monkeypatch: pytest.MonkeyPatch) 
 
     assert guid == "guid-123"
     assert channel.closed is True
+
+
+@pytest.mark.asyncio
+async def test_authenticate_robot_guid_bytes_are_decoded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = _FakeChannel()
+    _patch_grpc(monkeypatch, channel)
+
+    guid = await authenticate_robot_guid(
+        ip="192.168.1.201",
+        name="Vector-T3X9",
+        cert_pem=b"pem",
+        user_session_id="Anything1",
+        stub_factory=lambda ch: _AuthStubBytes(),
+        request_factory=lambda session_id, client_name: {
+            "user_session_id": session_id,
+            "client_name": client_name,
+        },
+    )
+
+    assert guid == "guid-bytes-123"
 
 
 @pytest.mark.asyncio
