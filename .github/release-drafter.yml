@@ -5,25 +5,25 @@ sort-direction: ascending
 exclude-labels:
   - 'skip-changelog'
 categories:
-  - title: 'Breaking Changes'
+  - title: '🛠 Breaking Changes'
     labels:
-      - 'breaking-change'
+      - breaking-change
 
-  - title: 'Features'
+  - title: '🚀 Features'
     labels:
       - 'feature request'
       - 'enhancement'
 
-  - title: 'Bug Fixes'
+  - title: '🐛 Bug Fixes'
     labels:
       - 'fix'
       - 'bugfix'
       - 'bug'
 
-  - title: 'Maintenance'
+  - title: '🧰 Maintenance'
     label: 'chore'
 
-  - title: 'Dependencies'
+  - title: ":package: Dependencies"
     labels:
       - 'dependencies'
 
@@ -43,6 +43,10 @@ template: |
 
   $CHANGES
 
+  ## Say thanks
+
+  <a href="https://www.buymeacoffee.com/mtrab" target="_blank"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;-webkit-box-shadow: 0px 3px 2px 0px rgba(190, 190, 190, 0.5) !important;" ></a>
+
 autolabeler:
   - label: 'bug'
     branch:
@@ -50,3 +54,6 @@ autolabeler:
   - label: 'feature request'
     branch:
       - '/feature\/.+/'
+  - label: 'chore'
+    branch:
+      - '/chore\/.+/'
