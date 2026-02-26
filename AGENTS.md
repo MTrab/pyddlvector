@@ -85,6 +85,7 @@ The module should be designed so Home Assistant can consume it without patching 
 
 All changes must be made in dedicated branches intended for merge.
 
+- Before making any file change, the agent MUST verify it is on a non-`main`/non-`master` branch and create/switch branch if needed.
 - Never commit directly to `main`/`master`
 - Keep commits small and focused
 - Include tests for behavior changes where feasible
