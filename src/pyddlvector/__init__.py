@@ -26,6 +26,7 @@ from .provisioning import (
 )
 from .settings import fetch_master_volume, update_master_volume
 from .statistics import RobotStatistics, fetch_lifetime_statistics
+from .stimulation import RobotStimulation, parse_stimulation_info
 
 __all__ = [
     "RobotConfig",
@@ -48,7 +49,9 @@ __all__ = [
     "fetch_lifetime_statistics",
     "fetch_master_volume",
     "messaging",
+    "parse_stimulation_info",
     "provision_runtime_robot",
+    "RobotStimulation",
     "RobotStatistics",
     "update_master_volume",
 ]
