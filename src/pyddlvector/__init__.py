@@ -24,6 +24,7 @@ from .provisioning import (
     fetch_official_session_token,
     provision_runtime_robot,
 )
+from .settings import fetch_master_volume, update_master_volume
 from .statistics import RobotStatistics, fetch_lifetime_statistics
 
 __all__ = [
@@ -45,9 +46,11 @@ __all__ = [
     "fetch_cert_from_robot_tls",
     "fetch_official_session_token",
     "fetch_lifetime_statistics",
+    "fetch_master_volume",
     "messaging",
     "provision_runtime_robot",
     "RobotStatistics",
+    "update_master_volume",
 ]
 
 
