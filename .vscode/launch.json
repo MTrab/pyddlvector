@@ -5,36 +5,36 @@
       "name": "pyddlvector: Example (wirepod)",
       "type": "python",
       "request": "launch",
-      "module": "poetry",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "subProcess": true,
       "justMyCode": true,
       "args": [
-        "run",
-        "python",
-        "examples/connect_vector_t3x9.py",
         "--mode",
         "wirepod"
-      ]
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      }
     },
     {
       "name": "pyddlvector: Example (official)",
       "type": "python",
       "request": "launch",
-      "module": "poetry",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "program": "${workspaceFolder}/examples/connect_vector_t3x9.py",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "subProcess": true,
       "justMyCode": true,
       "args": [
-        "run",
-        "python",
-        "examples/connect_vector_t3x9.py",
         "--mode",
         "official"
       ],
       "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
         "VECTOR_EMAIL": "",
         "VECTOR_PASSWORD": ""
       }
