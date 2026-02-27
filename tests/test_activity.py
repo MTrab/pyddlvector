@@ -216,6 +216,12 @@ def test_describe_robot_activity_being_held() -> None:
     assert activity == "Being held"
 
 
+def test_describe_robot_activity_sleeping() -> None:
+    status = int(protocol.ROBOT_STATUS_CALM_POWER_MODE)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Sleeping"
+
+
 def test_describe_robot_activity_fallback_is_ready_not_idle() -> None:
     activity = describe_robot_activity(_robot_state())
     assert activity == "Ready"

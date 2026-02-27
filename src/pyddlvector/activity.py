@@ -16,6 +16,7 @@ ROBOT_STATUS_IS_PICKING_OR_PLACING = int(protocol.ROBOT_STATUS_IS_PICKING_OR_PLA
 ROBOT_STATUS_IS_CARRYING_BLOCK = int(protocol.ROBOT_STATUS_IS_CARRYING_BLOCK)
 ROBOT_STATUS_ARE_WHEELS_MOVING = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
 ROBOT_STATUS_IS_PATHING = int(protocol.ROBOT_STATUS_IS_PATHING)
+ROBOT_STATUS_CALM_POWER_MODE = int(protocol.ROBOT_STATUS_CALM_POWER_MODE)
 ROBOT_STATUS_IS_BUTTON_PRESSED = int(protocol.ROBOT_STATUS_IS_BUTTON_PRESSED)
 OBJECT_TYPE_LIGHTCUBE = int(protocol.BLOCK_LIGHTCUBE1)
 OBJECT_TYPE_CHARGER = int(protocol.CHARGER_BASIC)
@@ -52,6 +53,8 @@ def describe_robot_activity(
         return "Being held"
     if status & ROBOT_STATUS_IS_PICKED_UP:
         return "Picked up"
+    if status & ROBOT_STATUS_CALM_POWER_MODE:
+        return "Sleeping"
     if is_pathing and saw_face_search:
         return "Looking for faces"
     if is_pathing and saw_charger_search:
