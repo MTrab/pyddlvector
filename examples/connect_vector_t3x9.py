@@ -9,6 +9,7 @@ import sys
 from pyddlvector import (
     RobotActivityTracker,
     VectorClient,
+    extract_robot_telemetry,
     fetch_lifetime_statistics,
     messaging,
     provision_runtime_robot,
@@ -45,7 +46,7 @@ async def _read_current_robot_activity(
     client: VectorClient,
     *,
     timeout: float,
-) -> str:
+) -> tuple[str, object | None]:
     stream = client.stub.EventStream(messaging.protocol.EventRequest(), timeout=timeout)
     tracker = RobotActivityTracker()
     latest_robot_state = None
@@ -66,12 +67,12 @@ async def _read_current_robot_activity(
                     or tracker.saw_cube_search
                     or tracker.saw_object_search
                 ):
-                    return tracker.activity_from_robot_state(latest_robot_state)
+                    return tracker.activity_from_robot_state(latest_robot_state), latest_robot_state
         if latest_robot_state is None:
-            return "Unknown (no robot_state event received)"
-        return tracker.activity_from_robot_state(latest_robot_state)
+            return "Unknown (no robot_state event received)", None
+        return tracker.activity_from_robot_state(latest_robot_state), latest_robot_state
     except TimeoutError:
-        return "Unknown (timed out waiting for robot_state)"
+        return "Unknown (timed out waiting for robot_state)", None
     finally:
         stream.cancel()
 
@@ -136,13 +137,31 @@ async def main() -> int:
         is_charging = bool(getattr(battery_response, "is_charging", False))
         on_charger = bool(getattr(battery_response, "is_on_charger_platform", False))
 
-        activity = await _read_current_robot_activity(client, timeout=args.timeout)
+        activity, robot_state = await _read_current_robot_activity(client, timeout=args.timeout)
 
         print("Battery level:", _battery_level_name(battery_level))
         print("Battery volts:", f"{battery_volts:.2f}V")
         print("Charging:", "yes" if is_charging else "no")
         print("On charger:", "yes" if on_charger else "no")
         print("Current activity:", activity)
+        if robot_state is not None:
+            telemetry = extract_robot_telemetry(robot_state)
+            print("Roll (rad):", f"{telemetry.roll_rad:.3f}")
+            print("Pitch (rad):", f"{telemetry.pitch_rad:.3f}")
+            print("Yaw (rad):", f"{telemetry.yaw_rad:.3f}")
+            print("Lift height (mm):", f"{telemetry.lift_height_mm:.1f}")
+            print(
+                "Accel (mm/s^2):",
+                f"x={telemetry.accel_x_mmps2:.2f}",
+                f"y={telemetry.accel_y_mmps2:.2f}",
+                f"z={telemetry.accel_z_mmps2:.2f}",
+            )
+            print(
+                "Gyro (rad/s):",
+                f"x={telemetry.gyro_x_radps:.3f}",
+                f"y={telemetry.gyro_y_radps:.3f}",
+                f"z={telemetry.gyro_z_radps:.3f}",
+            )
 
         stats = await fetch_lifetime_statistics(client, timeout=args.timeout)
         print("Days alive:", stats.days_alive)
