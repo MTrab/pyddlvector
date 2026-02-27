@@ -10,6 +10,7 @@ from pyddlvector.exceptions import (
 )
 from pyddlvector.provisioning import (
     authenticate_robot_guid,
+    derive_name_from_cert,
     fetch_official_session_token,
     provision_runtime_robot,
 )
@@ -273,4 +274,65 @@ async def test_wirepod_falls_back_to_robot_tls_when_url_fetch_fails(
     )
 
     assert config.cert_pem == b"tls-cert"
+
+
+def test_derive_name_from_cert_prefers_san(monkeypatch: pytest.MonkeyPatch) -> None:
+    cert_info = {
+        "subjectAltName": (("DNS", "Vector-T3X9.local"),),
+        "subject": ((("commonName", "Vector-T3X9"),),),
+    }
+    monkeypatch.setattr("pyddlvector.provisioning.ssl._ssl._test_decode_cert", lambda _: cert_info)
+
+    name = derive_name_from_cert(b"pem")
+    assert name == "Vector-T3X9.local"
+
+
+def test_derive_name_from_cert_falls_back_to_cn(monkeypatch: pytest.MonkeyPatch) -> None:
+    cert_info = {
+        "subjectAltName": (),
+        "subject": ((("commonName", "Vector-T3X9"),),),
+    }
+    monkeypatch.setattr("pyddlvector.provisioning.ssl._ssl._test_decode_cert", lambda _: cert_info)
+
+    name = derive_name_from_cert(b"pem")
+    assert name == "Vector-T3X9"
+
+
+@pytest.mark.asyncio
+async def test_provision_runtime_robot_derives_name_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def tls_cert(ip: str, *, timeout: float = 10.0, port: int = 443) -> bytes:
+        del ip, timeout, port
+        return b"tls-cert"
+
+    captured_kwargs: dict[str, Any] = {}
+
+    async def fake_guid(**kwargs: Any) -> str:
+        captured_kwargs.update(kwargs)
+        return "guid-from-rpc"
+
+    monkeypatch.setattr("pyddlvector.provisioning.fetch_cert_from_robot_tls", tls_cert)
+    monkeypatch.setattr("pyddlvector.provisioning.authenticate_robot_guid", fake_guid)
+    monkeypatch.setattr(
+        "pyddlvector.provisioning.derive_name_from_cert",
+        lambda cert_pem: "Vector-Autodiscovered",
+    )
+
+    config = await provision_runtime_robot(
+        mode="wirepod",
+        name=None,
+        ip="192.168.1.201",
+        serial=None,
+        wirepod_url=None,
+        session_id="Anything1",
+        stub_factory=lambda ch: object(),
+        request_factory=lambda session_id, client_name: {
+            "user_session_id": session_id,
+            "client_name": client_name,
+        },
+    )
+
+    assert captured_kwargs["name"] == "Vector-Autodiscovered"
+    assert config.name == "Vector-Autodiscovered"
     assert config.guid == "guid-from-rpc"
