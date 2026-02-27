@@ -60,7 +60,12 @@ async def _read_current_robot_activity(
             event_type = event.WhichOneof("event_type")
             if event_type == "robot_state":
                 latest_robot_state = event.robot_state
-                if tracker.saw_face_search or tracker.saw_cube_search or tracker.saw_object_search:
+                if (
+                    tracker.saw_face_search
+                    or tracker.saw_charger_search
+                    or tracker.saw_cube_search
+                    or tracker.saw_object_search
+                ):
                     return tracker.activity_from_robot_state(latest_robot_state)
         if latest_robot_state is None:
             return "Unknown (no robot_state event received)"
