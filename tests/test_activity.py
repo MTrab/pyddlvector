@@ -93,6 +93,63 @@ def test_tracker_detects_object_search() -> None:
 
     status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
     activity = tracker.activity_from_robot_state(_robot_state(status=status))
+    assert activity == "Looking for charger"
+
+
+def test_tracker_distinguishes_charger_from_cube_when_newer() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=10.0)
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.BLOCK_LIGHTCUBE1)),
+            ),
+        ),
+        now_monotonic=10.0,
+    )
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.CHARGER_BASIC)),
+            ),
+        ),
+        now_monotonic=11.0,
+    )
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = tracker.activity_from_robot_state(_robot_state(status=status), now_monotonic=11.2)
+    assert activity == "Looking for charger"
+
+
+def test_tracker_expires_old_search_signals() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=1.0)
+    tracker.observe_event(
+        _Event(
+            "robot_observed_face",
+            SimpleNamespace(),
+        ),
+        now_monotonic=10.0,
+    )
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = tracker.activity_from_robot_state(_robot_state(status=status), now_monotonic=12.0)
+    assert activity == "Exploring"
+
+
+def test_tracker_detects_generic_object_search() -> None:
+    tracker = RobotActivityTracker()
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=9999),
+            ),
+        )
+    )
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = tracker.activity_from_robot_state(_robot_state(status=status))
     assert activity == "Looking for objects"
 
 
