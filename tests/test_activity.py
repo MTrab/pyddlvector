@@ -38,16 +38,16 @@ def _robot_state(*, status: int = 0, left: float = 0.0, right: float = 0.0) -> o
     )
 
 
-def test_describe_robot_activity_prioritizes_on_charger() -> None:
-    status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
-    activity = describe_robot_activity(_robot_state(status=status), saw_face_search=True)
-    assert activity == "Exploring from charger"
+def test_describe_robot_activity_on_charger_is_ready() -> None:
+    status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Ready"
 
 
-def test_describe_robot_activity_charging_on_charger() -> None:
+def test_describe_robot_activity_charging_flag_is_not_activity_state() -> None:
     status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER | protocol.ROBOT_STATUS_IS_CHARGING)
     activity = describe_robot_activity(_robot_state(status=status))
-    assert activity == "Charging on charger"
+    assert activity == "Ready"
 
 
 def test_describe_robot_activity_exploring_when_wheels_move() -> None:
@@ -151,6 +151,57 @@ def test_tracker_detects_generic_object_search() -> None:
     status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
     activity = tracker.activity_from_robot_state(_robot_state(status=status))
     assert activity == "Looking for objects"
+
+
+def test_tracker_holds_recent_looking_state_over_exploring() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=1.0, action_hold_seconds=4.0)
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.CHARGER_BASIC)),
+            ),
+        ),
+        now_monotonic=10.0,
+    )
+    pathing_status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=pathing_status), now_monotonic=10.1)
+        == "Looking for charger"
+    )
+
+    # Search signal expired, but recent looking action should still hold over exploring.
+    exploring_status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=exploring_status), now_monotonic=12.0)
+        == "Looking for charger"
+    )
+
+
+def test_tracker_action_hold_expires_back_to_exploring() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=1.0, action_hold_seconds=2.0)
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.BLOCK_LIGHTCUBE1)),
+            ),
+        ),
+        now_monotonic=10.0,
+    )
+    pathing_status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=pathing_status), now_monotonic=10.1)
+        == "Looking for cubes"
+    )
+
+    exploring_status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=exploring_status), now_monotonic=13.0)
+        == "Exploring"
+    )
 
 
 def test_describe_robot_activity_cliff_detected() -> None:

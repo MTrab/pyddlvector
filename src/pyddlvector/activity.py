@@ -12,16 +12,14 @@ ROBOT_STATUS_IS_FALLING = int(protocol.ROBOT_STATUS_IS_FALLING)
 ROBOT_STATUS_IS_PICKED_UP = int(protocol.ROBOT_STATUS_IS_PICKED_UP)
 ROBOT_STATUS_CLIFF_DETECTED = int(protocol.ROBOT_STATUS_CLIFF_DETECTED)
 ROBOT_STATUS_IS_BEING_HELD = int(protocol.ROBOT_STATUS_IS_BEING_HELD)
-ROBOT_STATUS_IS_ON_CHARGER = int(protocol.ROBOT_STATUS_IS_ON_CHARGER)
-ROBOT_STATUS_IS_CHARGING = int(protocol.ROBOT_STATUS_IS_CHARGING)
 ROBOT_STATUS_IS_PICKING_OR_PLACING = int(protocol.ROBOT_STATUS_IS_PICKING_OR_PLACING)
 ROBOT_STATUS_IS_CARRYING_BLOCK = int(protocol.ROBOT_STATUS_IS_CARRYING_BLOCK)
 ROBOT_STATUS_ARE_WHEELS_MOVING = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
 ROBOT_STATUS_IS_PATHING = int(protocol.ROBOT_STATUS_IS_PATHING)
-ROBOT_STATUS_IS_ANIMATING = int(protocol.ROBOT_STATUS_IS_ANIMATING)
 ROBOT_STATUS_IS_BUTTON_PRESSED = int(protocol.ROBOT_STATUS_IS_BUTTON_PRESSED)
 OBJECT_TYPE_LIGHTCUBE = int(protocol.BLOCK_LIGHTCUBE1)
 OBJECT_TYPE_CHARGER = int(protocol.CHARGER_BASIC)
+LOOKING_PREFIX = "Looking for "
 
 
 def describe_robot_activity(
@@ -36,7 +34,6 @@ def describe_robot_activity(
     left_speed = abs(float(getattr(robot_state, "left_wheel_speed_mmps", 0.0)))
     right_speed = abs(float(getattr(robot_state, "right_wheel_speed_mmps", 0.0)))
     status = int(getattr(robot_state, "status", 0))
-    is_on_charger = bool(status & ROBOT_STATUS_IS_ON_CHARGER)
     wheels_moving = bool(status & ROBOT_STATUS_ARE_WHEELS_MOVING)
     is_pathing = bool(status & ROBOT_STATUS_IS_PATHING)
     is_exploring = wheels_moving or (left_speed + right_speed) > 5.0
@@ -55,10 +52,6 @@ def describe_robot_activity(
         return "Being held"
     if status & ROBOT_STATUS_IS_PICKED_UP:
         return "Picked up"
-    if is_on_charger:
-        if status & ROBOT_STATUS_IS_CHARGING:
-            return "Charging on charger"
-        return "Exploring from charger"
     if is_pathing and saw_face_search:
         return "Looking for faces"
     if is_pathing and saw_charger_search:
@@ -73,14 +66,10 @@ def describe_robot_activity(
         return "Carrying an object"
     if is_exploring:
         return "Exploring"
-    if status & ROBOT_STATUS_IS_ANIMATING:
-        return "Animating"
     if status & ROBOT_STATUS_IS_BUTTON_PRESSED:
         return "Button pressed"
     if being_touched:
         return "Being touched"
-    if status & ROBOT_STATUS_IS_CHARGING:
-        return "Charging"
     return "Ready"
 
 
@@ -90,11 +79,14 @@ class RobotActivityTracker:
 
     search_signal_window_seconds: float = 3.0
     exploring_hold_seconds: float = 3.0
+    action_hold_seconds: float = 4.0
     _last_face_search_monotonic: float | None = None
     _last_charger_search_monotonic: float | None = None
     _last_cube_search_monotonic: float | None = None
     _last_object_search_monotonic: float | None = None
     _last_exploring_monotonic: float | None = None
+    _last_action_activity: str | None = None
+    _last_action_monotonic: float | None = None
 
     @property
     def saw_face_search(self) -> bool:
@@ -148,11 +140,29 @@ class RobotActivityTracker:
         now_value = time.monotonic() if now_monotonic is None else now_monotonic
         activity = describe_robot_activity(
             robot_state,
-            saw_face_search=self._is_recent(self._last_face_search_monotonic, now_value),
-            saw_charger_search=self._is_recent(self._last_charger_search_monotonic, now_value),
-            saw_cube_search=self._is_recent(self._last_cube_search_monotonic, now_value),
-            saw_object_search=self._is_recent(self._last_object_search_monotonic, now_value),
+            saw_face_search=self._is_recent_search(self._last_face_search_monotonic, now_value),
+            saw_charger_search=self._is_recent_search(
+                self._last_charger_search_monotonic,
+                now_value,
+            ),
+            saw_cube_search=self._is_recent_search(self._last_cube_search_monotonic, now_value),
+            saw_object_search=self._is_recent_search(
+                self._last_object_search_monotonic,
+                now_value,
+            ),
         )
+        if activity.startswith(LOOKING_PREFIX):
+            self._last_action_activity = activity
+            self._last_action_monotonic = now_value
+            return activity
+        if (
+            activity in {"Exploring", "Ready"}
+            and self._last_action_activity is not None
+            and self._is_recent_window(
+                self._last_action_monotonic, now_value, window=self.action_hold_seconds
+            )
+        ):
+            return self._last_action_activity
         if activity == "Exploring":
             self._last_exploring_monotonic = now_value
             return activity
@@ -164,7 +174,20 @@ class RobotActivityTracker:
             return "Exploring"
         return activity
 
-    def _is_recent(self, event_time: float | None, now_monotonic: float) -> bool:
+    def _is_recent_search(self, event_time: float | None, now_monotonic: float) -> bool:
+        return self._is_recent_window(
+            event_time,
+            now_monotonic,
+            window=self.search_signal_window_seconds,
+        )
+
+    def _is_recent_window(
+        self,
+        event_time: float | None,
+        now_monotonic: float,
+        *,
+        window: float,
+    ) -> bool:
         if event_time is None:
             return False
-        return (now_monotonic - event_time) <= self.search_signal_window_seconds
+        return (now_monotonic - event_time) <= window
