@@ -44,6 +44,12 @@ def test_describe_robot_activity_prioritizes_on_charger() -> None:
     assert activity == "Exploring from charger"
 
 
+def test_describe_robot_activity_charging_on_charger() -> None:
+    status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER | protocol.ROBOT_STATUS_IS_CHARGING)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Charging on charger"
+
+
 def test_describe_robot_activity_exploring_when_wheels_move() -> None:
     status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
     activity = describe_robot_activity(_robot_state(status=status))
@@ -89,3 +95,47 @@ def test_tracker_detects_object_search() -> None:
     activity = tracker.activity_from_robot_state(_robot_state(status=status))
     assert activity == "Looking for objects"
 
+
+def test_describe_robot_activity_cliff_detected() -> None:
+    status = int(protocol.ROBOT_STATUS_CLIFF_DETECTED)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Cliff detected"
+
+
+def test_describe_robot_activity_being_held() -> None:
+    status = int(protocol.ROBOT_STATUS_IS_BEING_HELD)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Being held"
+
+
+def test_describe_robot_activity_fallback_is_ready_not_idle() -> None:
+    activity = describe_robot_activity(_robot_state())
+    assert activity == "Ready"
+
+
+def test_tracker_holds_exploring_for_short_pause() -> None:
+    tracker = RobotActivityTracker(exploring_hold_seconds=3.0)
+    moving_status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(
+            _robot_state(status=moving_status),
+            now_monotonic=10.0,
+        )
+        == "Exploring"
+    )
+
+    # Brief pause should remain exploring instead of dropping to fallback state.
+    assert tracker.activity_from_robot_state(_robot_state(), now_monotonic=11.5) == "Exploring"
+
+
+def test_tracker_exploring_hold_expires() -> None:
+    tracker = RobotActivityTracker(exploring_hold_seconds=3.0)
+    moving_status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(
+            _robot_state(status=moving_status),
+            now_monotonic=10.0,
+        )
+        == "Exploring"
+    )
+    assert tracker.activity_from_robot_state(_robot_state(), now_monotonic=13.5) == "Ready"
