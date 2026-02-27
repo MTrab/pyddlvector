@@ -7,6 +7,7 @@ import socket
 import sys
 
 from pyddlvector import (
+    RobotActivityTracker,
     VectorClient,
     fetch_lifetime_statistics,
     messaging,
@@ -40,42 +41,30 @@ def _battery_level_name(level_value: int) -> str:
         return f"UNKNOWN({level_value})"
 
 
-def _describe_robot_activity(robot_state: object) -> str:
-    left_speed = abs(getattr(robot_state, "left_wheel_speed_mmps", 0.0))
-    right_speed = abs(getattr(robot_state, "right_wheel_speed_mmps", 0.0))
-    is_moving = (left_speed + right_speed) > 1.0
-
-    touch_data = getattr(robot_state, "touch_data", None)
-    being_touched = bool(getattr(touch_data, "is_being_touched", False))
-
-    carrying_object_id = int(getattr(robot_state, "carrying_object_id", -1))
-    is_carrying_object = carrying_object_id >= 0
-
-    if is_moving:
-        return "Moving around"
-    if being_touched:
-        return "Being touched"
-    if is_carrying_object:
-        return "Standing still while carrying an object"
-    return "Idle / standing still"
-
-
 async def _read_current_robot_activity(
     client: VectorClient,
     *,
     timeout: float,
 ) -> str:
     stream = client.stub.EventStream(messaging.protocol.EventRequest(), timeout=timeout)
+    tracker = RobotActivityTracker()
+    latest_robot_state = None
     try:
-        for _ in range(10):
+        for _ in range(25):
             event_response = await asyncio.wait_for(stream.read(), timeout=timeout)
             if event_response is None or not event_response.HasField("event"):
                 continue
 
-            event_type = event_response.event.WhichOneof("event_type")
+            event = event_response.event
+            tracker.observe_event(event)
+            event_type = event.WhichOneof("event_type")
             if event_type == "robot_state":
-                return _describe_robot_activity(event_response.event.robot_state)
-        return "Unknown (no robot_state event received)"
+                latest_robot_state = event.robot_state
+                if tracker.saw_face_search or tracker.saw_cube_search or tracker.saw_object_search:
+                    return tracker.activity_from_robot_state(latest_robot_state)
+        if latest_robot_state is None:
+            return "Unknown (no robot_state event received)"
+        return tracker.activity_from_robot_state(latest_robot_state)
     except TimeoutError:
         return "Unknown (timed out waiting for robot_state)"
     finally:

@@ -3,6 +3,7 @@
 from importlib import import_module
 from typing import Any
 
+from .activity import RobotActivityTracker, describe_robot_activity
 from .camera import CameraFrame, extract_camera_frame
 from .client import VectorClient
 from .config import RobotConfig, SdkConfigStore
@@ -35,6 +36,7 @@ __all__ = [
     "VectorClient",
     "VectorFleet",
     "CameraFrame",
+    "describe_robot_activity",
     "VectorAuthenticationError",
     "VectorConfigurationError",
     "VectorConnectionError",
@@ -54,6 +56,7 @@ __all__ = [
     "messaging",
     "parse_stimulation_info",
     "provision_runtime_robot",
+    "RobotActivityTracker",
     "RobotStimulation",
     "RobotStatistics",
     "update_master_volume",
