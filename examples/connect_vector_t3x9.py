@@ -16,9 +16,11 @@ from pyddlvector import (
 )
 
 DEFAULT_NAME = "Vector-T3X9"
+# DEFAULT_NAME = "Vector-A9E9"
 DEFAULT_SERIAL = "00908e7e"
 # DEFAULT_SERIAL = "00608f75"
 DEFAULT_IP = "192.168.1.201"
+# DEFAULT_IP = "192.168.1.202"
 DEFAULT_WIREPOD_URL = "http://escapepod.local:8080"
 
 

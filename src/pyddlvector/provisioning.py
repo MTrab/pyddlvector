@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import ssl
+import tempfile
 from typing import Any
 
 import grpc
@@ -179,10 +180,34 @@ async def authenticate_robot_guid(
     return str(guid)
 
 
+def derive_name_from_cert(cert_pem: bytes) -> str:
+    """Extract preferred TLS hostname (SAN first, then subject CN) from PEM cert."""
+    if not cert_pem:
+        raise VectorProvisioningError("Certificate payload is empty; cannot derive robot name")
+
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".pem") as cert_file:
+        cert_file.write(cert_pem)
+        cert_file.flush()
+        cert_info = ssl._ssl._test_decode_cert(cert_file.name)  # noqa: SLF001
+
+    san_entries = cert_info.get("subjectAltName", ())
+    for san_type, san_value in san_entries:
+        if san_type == "DNS" and isinstance(san_value, str) and san_value.strip():
+            return san_value.strip()
+
+    subject_entries = cert_info.get("subject", ())
+    for rdn in subject_entries:
+        for key, value in rdn:
+            if key == "commonName" and isinstance(value, str) and value.strip():
+                return value.strip()
+
+    raise VectorProvisioningError("Could not derive robot name from certificate SAN/CN")
+
+
 async def provision_runtime_robot(
     *,
     mode: str,
-    name: str,
+    name: str | None,
     ip: str,
     serial: str | None,
     stub_factory: Any,
@@ -200,6 +225,7 @@ async def provision_runtime_robot(
     - ``wirepod``: requires ``serial`` + ``wirepod_url`` or will fallback to robot TLS cert.
     """
     normalized_mode = mode.strip().lower()
+    provided_name = name.strip() if isinstance(name, str) else ""
 
     if normalized_mode == "official":
         if serial is None:
@@ -231,9 +257,11 @@ async def provision_runtime_robot(
     else:
         raise VectorProvisioningError(f"Unsupported provisioning mode '{mode}'")
 
+    resolved_name = provided_name or derive_name_from_cert(cert_pem)
+
     guid = await authenticate_robot_guid(
         ip=ip,
-        name=name,
+        name=resolved_name,
         cert_pem=cert_pem,
         user_session_id=resolved_session_id,
         stub_factory=stub_factory,
@@ -243,7 +271,7 @@ async def provision_runtime_robot(
 
     return RobotConfig.from_runtime(
         serial=serial,
-        name=name,
+        name=resolved_name,
         ip=ip,
         guid=guid,
         cert_pem=cert_pem,
