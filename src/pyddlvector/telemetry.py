@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,65 @@ class RobotTelemetry:
     gyro_x_radps: float
     gyro_y_radps: float
     gyro_z_radps: float
+
+
+@dataclass(slots=True)
+class TelemetryFilter:
+    """Rate-limit and quantize telemetry updates to reduce noisy change spam."""
+
+    min_update_interval_seconds: float = 0.5
+    orientation_quantum_rad: float = 0.05
+    lift_quantum_mm: float = 1.0
+    accel_quantum_mmps2: float = 5.0
+    gyro_quantum_radps: float = 0.01
+    _last_published: RobotTelemetry | None = None
+    _last_published_monotonic: float | None = None
+
+    def process(
+        self,
+        telemetry: RobotTelemetry,
+        *,
+        now_monotonic: float | None = None,
+    ) -> RobotTelemetry | None:
+        """Return filtered telemetry when publish criteria are met, otherwise None."""
+        now_value = time.monotonic() if now_monotonic is None else now_monotonic
+        quantized = self.quantize(telemetry)
+
+        if self._last_published is None:
+            self._last_published = quantized
+            self._last_published_monotonic = now_value
+            return quantized
+
+        if quantized == self._last_published:
+            return None
+
+        assert self._last_published_monotonic is not None
+        if (now_value - self._last_published_monotonic) < self.min_update_interval_seconds:
+            return None
+
+        self._last_published = quantized
+        self._last_published_monotonic = now_value
+        return quantized
+
+    def quantize(self, telemetry: RobotTelemetry) -> RobotTelemetry:
+        """Round telemetry fields to configured quanta."""
+        return RobotTelemetry(
+            roll_rad=_quantize(telemetry.roll_rad, self.orientation_quantum_rad),
+            pitch_rad=_quantize(telemetry.pitch_rad, self.orientation_quantum_rad),
+            yaw_rad=_quantize(telemetry.yaw_rad, self.orientation_quantum_rad),
+            lift_height_mm=_quantize(telemetry.lift_height_mm, self.lift_quantum_mm),
+            accel_x_mmps2=_quantize(telemetry.accel_x_mmps2, self.accel_quantum_mmps2),
+            accel_y_mmps2=_quantize(telemetry.accel_y_mmps2, self.accel_quantum_mmps2),
+            accel_z_mmps2=_quantize(telemetry.accel_z_mmps2, self.accel_quantum_mmps2),
+            gyro_x_radps=_quantize(telemetry.gyro_x_radps, self.gyro_quantum_radps),
+            gyro_y_radps=_quantize(telemetry.gyro_y_radps, self.gyro_quantum_radps),
+            gyro_z_radps=_quantize(telemetry.gyro_z_radps, self.gyro_quantum_radps),
+        )
+
+    def reset(self) -> None:
+        """Reset filter history."""
+        self._last_published = None
+        self._last_published_monotonic = None
 
 
 def extract_robot_telemetry(robot_state: Any) -> RobotTelemetry:
@@ -74,3 +134,9 @@ def _quaternion_to_euler_rad(
     yaw = math.atan2(siny_cosp, cosy_cosp)
 
     return roll, pitch, yaw
+
+
+def _quantize(value: float, quantum: float) -> float:
+    if quantum <= 0:
+        return float(value)
+    return round(float(value) / quantum) * quantum
