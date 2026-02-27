@@ -38,16 +38,16 @@ def _robot_state(*, status: int = 0, left: float = 0.0, right: float = 0.0) -> o
     )
 
 
-def test_describe_robot_activity_on_charger_is_ready() -> None:
+def test_describe_robot_activity_on_charger_is_exploring_from_charger() -> None:
     status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER)
     activity = describe_robot_activity(_robot_state(status=status))
-    assert activity == "Ready"
+    assert activity == "Exploring from charger"
 
 
-def test_describe_robot_activity_charging_flag_is_not_activity_state() -> None:
+def test_describe_robot_activity_charging_flag_does_not_create_charging_state() -> None:
     status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER | protocol.ROBOT_STATUS_IS_CHARGING)
     activity = describe_robot_activity(_robot_state(status=status))
-    assert activity == "Ready"
+    assert activity == "Exploring from charger"
 
 
 def test_describe_robot_activity_exploring_when_wheels_move() -> None:

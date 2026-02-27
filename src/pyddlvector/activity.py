@@ -12,6 +12,7 @@ ROBOT_STATUS_IS_FALLING = int(protocol.ROBOT_STATUS_IS_FALLING)
 ROBOT_STATUS_IS_PICKED_UP = int(protocol.ROBOT_STATUS_IS_PICKED_UP)
 ROBOT_STATUS_CLIFF_DETECTED = int(protocol.ROBOT_STATUS_CLIFF_DETECTED)
 ROBOT_STATUS_IS_BEING_HELD = int(protocol.ROBOT_STATUS_IS_BEING_HELD)
+ROBOT_STATUS_IS_ON_CHARGER = int(protocol.ROBOT_STATUS_IS_ON_CHARGER)
 ROBOT_STATUS_IS_PICKING_OR_PLACING = int(protocol.ROBOT_STATUS_IS_PICKING_OR_PLACING)
 ROBOT_STATUS_IS_CARRYING_BLOCK = int(protocol.ROBOT_STATUS_IS_CARRYING_BLOCK)
 ROBOT_STATUS_ARE_WHEELS_MOVING = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
@@ -55,6 +56,8 @@ def describe_robot_activity(
         return "Picked up"
     if status & ROBOT_STATUS_CALM_POWER_MODE:
         return "Sleeping"
+    if status & ROBOT_STATUS_IS_ON_CHARGER:
+        return "Exploring from charger"
     if is_pathing and saw_face_search:
         return "Looking for faces"
     if is_pathing and saw_charger_search:
