@@ -32,6 +32,20 @@ class FakeChannel:
 
 
 class FakeStub:
+    def __init__(self) -> None:
+        self.sdk_init_request: object | None = None
+        self.sdk_init_timeout: float | None = None
+
+    async def SDKInitialization(
+        self,
+        request: object,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        self.sdk_init_request = request
+        self.sdk_init_timeout = timeout
+        return {"ok": True}
+
     async def Echo(
         self,
         request: dict[str, Any],
@@ -64,6 +78,14 @@ class FakeInternalRpcError(grpc.RpcError):
 
     def details(self) -> str:
         return "internal"
+
+
+class FakeUnimplementedRpcError(grpc.RpcError):
+    def code(self) -> grpc.StatusCode:
+        return grpc.StatusCode.UNIMPLEMENTED
+
+    def details(self) -> str:
+        return "unimplemented"
 
 
 @pytest.fixture
@@ -112,6 +134,45 @@ async def test_connect_and_rpc_success(
 
     await client.disconnect()
     assert fake_channel.closed is True
+
+
+@pytest.mark.asyncio
+async def test_connect_calls_sdk_initialization_when_supported(
+    monkeypatch: pytest.MonkeyPatch,
+    robot_config: RobotConfig,
+) -> None:
+    fake_channel = FakeChannel()
+    _patch_grpc(monkeypatch, fake_channel)
+    stub = FakeStub()
+
+    client = VectorClient(robot_config, stub_factory=lambda channel: stub)
+    await client.connect()
+
+    assert stub.sdk_init_request is not None
+    assert stub.sdk_init_timeout == 10.0
+
+
+@pytest.mark.asyncio
+async def test_connect_ignores_unimplemented_sdk_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+    robot_config: RobotConfig,
+) -> None:
+    fake_channel = FakeChannel()
+    _patch_grpc(monkeypatch, fake_channel)
+
+    class UnimplementedInitStub(FakeStub):
+        async def SDKInitialization(
+            self,
+            request: object,
+            *,
+            timeout: float | None = None,
+        ) -> dict[str, Any]:
+            del request, timeout
+            raise FakeUnimplementedRpcError()
+
+    client = VectorClient(robot_config, stub_factory=lambda channel: UnimplementedInitStub())
+    await client.connect()
+    assert client.connected is True
 
 
 @pytest.mark.asyncio

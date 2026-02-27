@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import platform
 from collections.abc import Awaitable, Callable
+from importlib import metadata
 from typing import Any, Generic, TypeVar
 
 import grpc
@@ -84,6 +86,13 @@ class VectorClient(Generic[StubT]):
 
         self._channel = channel
         self._stub = self._stub_factory(channel)
+        try:
+            await self._maybe_sdk_initialize(timeout=effective_timeout)
+        except Exception:
+            self._stub = None
+            self._channel = None
+            await channel.close()
+            raise
 
     async def disconnect(self) -> None:
         """Close the active channel and clear stub references."""
@@ -167,6 +176,45 @@ class VectorClient(Generic[StubT]):
             ) from err
         except grpc.RpcError as err:
             raise _map_rpc_error(err, path) from err
+
+    async def _maybe_sdk_initialize(self, *, timeout: float) -> None:
+        """Send SDK initialization metadata when supported by the bound stub."""
+        method = getattr(self.stub, "SDKInitialization", None)
+        if method is None:
+            return
+        if not callable(method):
+            raise VectorProtocolError("Stub attribute 'SDKInitialization' is not callable")
+
+        request = _build_sdk_initialization_request()
+        try:
+            await method(request, timeout=timeout)
+        except TimeoutError as err:
+            raise VectorTimeoutError(
+                f"RPC 'SDKInitialization' timed out after {timeout:.2f}s"
+            ) from err
+        except grpc.RpcError as err:
+            if err.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return
+            raise _map_rpc_error(err, "SDKInitialization") from err
+
+
+def _build_sdk_initialization_request() -> Any:
+    from . import messaging
+
+    return messaging.protocol.SDKInitializationRequest(
+        sdk_module_version=_module_version(),
+        python_version=platform.python_version(),
+        python_implementation=platform.python_implementation(),
+        os_version=platform.platform(),
+        cpu_version=platform.machine(),
+    )
+
+
+def _module_version() -> str:
+    try:
+        return metadata.version("pyddlvector")
+    except metadata.PackageNotFoundError:
+        return "0+unknown"
 
 
 def _map_rpc_error(
