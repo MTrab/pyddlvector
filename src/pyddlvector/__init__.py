@@ -26,7 +26,14 @@ from .provisioning import (
     fetch_official_session_token,
     provision_runtime_robot,
 )
-from .settings import fetch_master_volume, update_master_volume
+from .settings import (
+    RobotEyeColor,
+    fetch_eye_color,
+    fetch_master_volume,
+    update_custom_eye_color,
+    update_eye_color_preset,
+    update_master_volume,
+)
 from .statistics import RobotStatistics, fetch_lifetime_statistics
 from .stimulation import RobotStimulation, parse_stimulation_info
 from .telemetry import RobotTelemetry, TelemetryFilter, extract_robot_telemetry
@@ -53,16 +60,20 @@ __all__ = [
     "extract_camera_frame",
     "fetch_official_session_token",
     "fetch_lifetime_statistics",
+    "fetch_eye_color",
     "fetch_master_volume",
     "messaging",
     "parse_stimulation_info",
     "provision_runtime_robot",
     "RobotActivityTracker",
+    "RobotEyeColor",
     "RobotStimulation",
     "RobotStatistics",
     "RobotTelemetry",
     "TelemetryFilter",
     "extract_robot_telemetry",
+    "update_custom_eye_color",
+    "update_eye_color_preset",
     "update_master_volume",
 ]
 
