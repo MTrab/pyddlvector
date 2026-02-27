@@ -35,6 +35,8 @@ class FakeStub:
     def __init__(self) -> None:
         self.sdk_init_request: object | None = None
         self.sdk_init_timeout: float | None = None
+        self.protocol_request: object | None = None
+        self.protocol_timeout: float | None = None
 
     async def SDKInitialization(
         self,
@@ -44,6 +46,16 @@ class FakeStub:
     ) -> dict[str, Any]:
         self.sdk_init_request = request
         self.sdk_init_timeout = timeout
+        return {"ok": True}
+
+    async def ProtocolVersion(
+        self,
+        request: object,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        self.protocol_request = request
+        self.protocol_timeout = timeout
         return {"ok": True}
 
     async def Echo(
@@ -150,6 +162,8 @@ async def test_connect_calls_sdk_initialization_when_supported(
 
     assert stub.sdk_init_request is not None
     assert stub.sdk_init_timeout == 10.0
+    assert stub.protocol_request is not None
+    assert stub.protocol_timeout == 10.0
 
 
 @pytest.mark.asyncio

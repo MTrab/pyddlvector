@@ -86,6 +86,7 @@ class VectorClient(Generic[StubT]):
         self._channel = channel
         self._stub = self._stub_factory(channel)
         try:
+            await self._maybe_protocol_handshake(timeout=effective_timeout)
             await self._maybe_sdk_initialize(timeout=effective_timeout)
         except Exception:
             self._stub = None
@@ -196,11 +197,44 @@ class VectorClient(Generic[StubT]):
                 return
             raise _map_rpc_error(err, "SDKInitialization") from err
 
+    async def _maybe_protocol_handshake(self, *, timeout: float) -> None:
+        """Negotiate protocol version when supported by the bound stub."""
+        method = getattr(self.stub, "ProtocolVersion", None)
+        if method is None:
+            return
+        if not callable(method):
+            raise VectorProtocolError("Stub attribute 'ProtocolVersion' is not callable")
+
+        request = _build_protocol_version_request()
+        if request is None:
+            return
+        try:
+            response = await method(request, timeout=timeout)
+        except TimeoutError as err:
+            raise VectorTimeoutError(
+                f"RPC 'ProtocolVersion' timed out after {timeout:.2f}s"
+            ) from err
+        except grpc.RpcError as err:
+            if err.code() == grpc.StatusCode.UNIMPLEMENTED:
+                return
+            raise _map_rpc_error(err, "ProtocolVersion") from err
+
+        # Match SDK expectation when response shape includes result enum.
+        if hasattr(response, "result") and hasattr(request, "min_host_version"):
+            result = int(getattr(response, "result", 0))
+            success = int(getattr(_messaging_protocol().ProtocolVersionResponse, "SUCCESS", 1))
+            if result != success:
+                raise VectorProtocolError("Robot rejected protocol version negotiation")
+            host_version = int(getattr(response, "host_version", 0))
+            min_host_version = int(getattr(request, "min_host_version", 0))
+            if host_version < min_host_version:
+                raise VectorProtocolError("Robot host protocol version is too old")
+
 
 def _build_sdk_initialization_request() -> Any:
-    from . import messaging
+    protocol = _messaging_protocol()
 
-    return messaging.protocol.SDKInitializationRequest(
+    return protocol.SDKInitializationRequest(
         sdk_module_version=_module_version(),
         python_version=platform.python_version(),
         python_implementation=platform.python_implementation(),
@@ -212,6 +246,22 @@ def _build_sdk_initialization_request() -> Any:
 def _module_version() -> str:
     # Keep this non-blocking for asyncio integrations (e.g. Home Assistant).
     return "0.1.0"
+
+
+def _build_protocol_version_request() -> Any | None:
+    protocol = _messaging_protocol()
+    if not hasattr(protocol, "ProtocolVersionRequest"):
+        return None
+    return protocol.ProtocolVersionRequest(
+        client_version=getattr(protocol, "PROTOCOL_VERSION_CURRENT", 0),
+        min_host_version=getattr(protocol, "PROTOCOL_VERSION_MINIMUM", 0),
+    )
+
+
+def _messaging_protocol() -> Any:
+    from . import messaging
+
+    return messaging.protocol
 
 
 def _map_rpc_error(
