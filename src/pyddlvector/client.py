@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import platform
 from collections.abc import Awaitable, Callable
-from importlib import metadata
 from typing import Any, Generic, TypeVar
 
 import grpc
@@ -211,10 +210,8 @@ def _build_sdk_initialization_request() -> Any:
 
 
 def _module_version() -> str:
-    try:
-        return metadata.version("pyddlvector")
-    except metadata.PackageNotFoundError:
-        return "0+unknown"
+    # Keep this non-blocking for asyncio integrations (e.g. Home Assistant).
+    return "0.1.0"
 
 
 def _map_rpc_error(
