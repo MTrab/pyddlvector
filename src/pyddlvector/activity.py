@@ -66,7 +66,8 @@ def describe_robot_activity(
         return "Looking for cubes"
     if is_pathing and saw_object_search:
         return "Looking for objects"
-    if status & ROBOT_STATUS_IS_PICKING_OR_PLACING:
+    # This flag can be noisy while driving; only surface it when wheels are not moving.
+    if status & ROBOT_STATUS_IS_PICKING_OR_PLACING and not wheels_moving:
         return "Picking or placing object"
     if status & ROBOT_STATUS_IS_CARRYING_BLOCK or is_carrying_object:
         return "Carrying an object"
@@ -144,6 +145,8 @@ class RobotActivityTracker:
     ) -> str:
         """Describe current activity using tracked event signals."""
         now_value = time.monotonic() if now_monotonic is None else now_monotonic
+        recent_search_activity = self._recent_search_activity(now_value)
+
         activity = describe_robot_activity(
             robot_state,
             saw_face_search=self._is_recent_search(self._last_face_search_monotonic, now_value),
@@ -157,12 +160,30 @@ class RobotActivityTracker:
                 now_value,
             ),
         )
+
+        if recent_search_activity is not None:
+            self._last_action_activity = recent_search_activity
+            self._last_action_monotonic = now_value
+            if activity in {
+                "Exploring",
+                "Ready",
+                "Exploring from charger",
+                "Picking or placing object",
+            }:
+                return recent_search_activity
+
         if activity.startswith(LOOKING_PREFIX):
             self._last_action_activity = activity
             self._last_action_monotonic = now_value
             return activity
+
         if (
-            activity in {"Exploring", "Ready"}
+            activity in {
+                "Exploring",
+                "Ready",
+                "Exploring from charger",
+                "Picking or placing object",
+            }
             and self._last_action_activity is not None
             and self._is_recent_window(
                 self._last_action_monotonic, now_value, window=self.action_hold_seconds
@@ -197,3 +218,14 @@ class RobotActivityTracker:
         if event_time is None:
             return False
         return (now_monotonic - event_time) <= window
+
+    def _recent_search_activity(self, now_monotonic: float) -> str | None:
+        if self._is_recent_search(self._last_face_search_monotonic, now_monotonic):
+            return "Looking for faces"
+        if self._is_recent_search(self._last_charger_search_monotonic, now_monotonic):
+            return "Looking for charger"
+        if self._is_recent_search(self._last_cube_search_monotonic, now_monotonic):
+            return "Looking for cubes"
+        if self._is_recent_search(self._last_object_search_monotonic, now_monotonic):
+            return "Looking for objects"
+        return None

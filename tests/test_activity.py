@@ -204,6 +204,44 @@ def test_tracker_action_hold_expires_back_to_exploring() -> None:
     )
 
 
+def test_picking_or_placing_does_not_override_when_wheels_moving() -> None:
+    status = int(
+        protocol.ROBOT_STATUS_IS_PICKING_OR_PLACING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING
+    )
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Exploring"
+
+
+def test_tracker_keeps_looking_for_charger_while_base_flips() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=3.0, action_hold_seconds=4.0)
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.CHARGER_BASIC)),
+            ),
+        ),
+        now_monotonic=10.0,
+    )
+
+    # Pathing phase.
+    pathing = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert tracker.activity_from_robot_state(_robot_state(status=pathing), now_monotonic=10.1) == (
+        "Looking for charger"
+    )
+    # Base would otherwise become ready.
+    assert tracker.activity_from_robot_state(_robot_state(status=0), now_monotonic=10.8) == (
+        "Looking for charger"
+    )
+    # Base would otherwise be exploring.
+    exploring = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=exploring), now_monotonic=11.5)
+        == "Looking for charger"
+    )
+
+
 def test_describe_robot_activity_cliff_detected() -> None:
     status = int(protocol.ROBOT_STATUS_CLIFF_DETECTED)
     activity = describe_robot_activity(_robot_state(status=status))
