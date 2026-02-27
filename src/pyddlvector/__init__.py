@@ -29,6 +29,7 @@ from .provisioning import (
 from .settings import fetch_master_volume, update_master_volume
 from .statistics import RobotStatistics, fetch_lifetime_statistics
 from .stimulation import RobotStimulation, parse_stimulation_info
+from .telemetry import RobotTelemetry, extract_robot_telemetry
 
 __all__ = [
     "RobotConfig",
@@ -59,6 +60,8 @@ __all__ = [
     "RobotActivityTracker",
     "RobotStimulation",
     "RobotStatistics",
+    "RobotTelemetry",
+    "extract_robot_telemetry",
     "update_master_volume",
 ]
 
