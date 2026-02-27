@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from pyddlvector.activity import RobotActivityTracker, describe_robot_activity
+from pyddlvector.messaging import protocol
+
+
+class _ObjectEvent:
+    def __init__(self, object_event_type: str, payload: object) -> None:
+        self._object_event_type = object_event_type
+        if object_event_type == "robot_observed_object":
+            self.robot_observed_object = payload
+
+    def WhichOneof(self, _: str) -> str:
+        return self._object_event_type
+
+
+class _Event:
+    def __init__(self, event_type: str, payload: object) -> None:
+        self._event_type = event_type
+        if event_type == "object_event":
+            self.object_event = payload
+        if event_type == "robot_state":
+            self.robot_state = payload
+
+    def WhichOneof(self, _: str) -> str:
+        return self._event_type
+
+
+def _robot_state(*, status: int = 0, left: float = 0.0, right: float = 0.0) -> object:
+    return SimpleNamespace(
+        status=status,
+        left_wheel_speed_mmps=left,
+        right_wheel_speed_mmps=right,
+        touch_data=SimpleNamespace(is_being_touched=False),
+        carrying_object_id=-1,
+    )
+
+
+def test_describe_robot_activity_prioritizes_on_charger() -> None:
+    status = int(protocol.ROBOT_STATUS_IS_ON_CHARGER | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = describe_robot_activity(_robot_state(status=status), saw_face_search=True)
+    assert activity == "Exploring from charger"
+
+
+def test_describe_robot_activity_exploring_when_wheels_move() -> None:
+    status = int(protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = describe_robot_activity(_robot_state(status=status))
+    assert activity == "Exploring"
+
+
+def test_describe_robot_activity_face_search_over_exploring() -> None:
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = describe_robot_activity(_robot_state(status=status), saw_face_search=True)
+    assert activity == "Looking for faces"
+
+
+def test_tracker_detects_cube_search() -> None:
+    tracker = RobotActivityTracker()
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.BLOCK_LIGHTCUBE1)),
+            ),
+        )
+    )
+
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = tracker.activity_from_robot_state(_robot_state(status=status))
+    assert activity == "Looking for cubes"
+
+
+def test_tracker_detects_object_search() -> None:
+    tracker = RobotActivityTracker()
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.CHARGER_BASIC)),
+            ),
+        )
+    )
+
+    status = int(protocol.ROBOT_STATUS_IS_PATHING | protocol.ROBOT_STATUS_ARE_WHEELS_MOVING)
+    activity = tracker.activity_from_robot_state(_robot_state(status=status))
+    assert activity == "Looking for objects"
+
