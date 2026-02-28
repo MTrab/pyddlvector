@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import struct
 from dataclasses import dataclass
 from typing import Any
 
@@ -337,12 +338,33 @@ async def update_custom_eye_color(
     if not (0.0 <= saturation <= 1.0):
         raise VectorProtocolError("Custom eye color saturation must be between 0.0 and 1.0")
 
-    request = protocol.SetEyeColorRequest(
-        hue=float(hue),
-        saturation=float(saturation),
-    )
-    await _call_set_eye_color(client, request, timeout=timeout)
-    return float(hue), float(saturation)
+    normalized_hue = float(hue)
+    normalized_saturation = float(saturation)
+
+    try:
+        response = await _call_update_settings_until_accepted(
+            client,
+            protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
+            timeout=timeout,
+            error_prefix="Custom eye color update was not accepted by robot",
+            send_update_settings=_build_update_settings_custom_eye_color_sender(
+                normalized_hue,
+                normalized_saturation,
+            ),
+        )
+        if response is None:
+            raise VectorProtocolError(
+                "Custom eye color update did not return a response payload"
+            )
+    except (VectorProtocolError, VectorRPCError) as err:
+        if not _should_fallback_to_update_settings_path(err):
+            raise
+        request = protocol.SetEyeColorRequest(
+            hue=normalized_hue,
+            saturation=normalized_saturation,
+        )
+        await _call_set_eye_color(client, request, timeout=timeout)
+    return normalized_hue, normalized_saturation
 
 
 async def _update_master_volume_via_update_settings(
@@ -457,6 +479,73 @@ async def _call_update_settings_with_explicit_teal(
 
 def _serialize_update_settings_teal(_: Any) -> bytes:
     return _UPDATE_SETTINGS_TEAL_REQUEST_BYTES
+
+
+def _build_update_settings_custom_eye_color_sender(
+    hue: float,
+    saturation: float,
+):
+    payload = _serialize_update_settings_custom_eye_color(hue, saturation)
+
+    async def _send(client: VectorClient[Any], request: Any, *, timeout: float | None = None):
+        return await client.unary_unary(
+            _UPDATE_SETTINGS_PATH,
+            request,
+            request_serializer=lambda _request: payload,
+            response_deserializer=protocol.UpdateSettingsResponse.FromString,
+            timeout=timeout,
+        )
+
+    return _send
+
+
+def _serialize_update_settings_custom_eye_color(hue: float, saturation: float) -> bytes:
+    # UpdateSettingsRequest.settings.custom_eye_color where custom_eye_color uses:
+    # hue fixed32 field 1, saturation fixed32 field 2, enabled varint field 3.
+    custom_eye_color_payload = b"".join(
+        (
+            _encode_key(1, 5),
+            struct.pack("<f", float(hue)),
+            _encode_key(2, 5),
+            struct.pack("<f", float(saturation)),
+            _encode_key(3, 0),
+            b"\x01",
+        )
+    )
+    settings_payload = b"".join(
+        (
+            _encode_key(3, 2),
+            _encode_varint(len(custom_eye_color_payload)),
+            custom_eye_color_payload,
+        )
+    )
+    return b"".join(
+        (
+            _encode_key(1, 2),
+            _encode_varint(len(settings_payload)),
+            settings_payload,
+        )
+    )
+
+
+def _encode_key(field_number: int, wire_type: int) -> bytes:
+    return _encode_varint((field_number << 3) | wire_type)
+
+
+def _encode_varint(value: int) -> bytes:
+    if value < 0:
+        raise ValueError("Varint encoder only supports non-negative integers")
+
+    encoded = bytearray()
+    remaining = value
+    while True:
+        to_write = remaining & 0x7F
+        remaining >>= 7
+        if remaining:
+            encoded.append(to_write | 0x80)
+        else:
+            encoded.append(to_write)
+            return bytes(encoded)
 
 
 async def _call_set_eye_color(

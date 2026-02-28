@@ -230,18 +230,61 @@ def test_update_eye_color_preset_teal_serializes_explicit_zero_enum_field() -> N
     ]
 
 
-def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
+def test_update_custom_eye_color_uses_update_settings_custom_eye_color() -> None:
     class FakeClient:
         class Stub:
             pass
 
         def __init__(self) -> None:
             self.stub = self.Stub()
-            self.calls: list[str] = []
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            request_serializer = kwargs["request_serializer"]
+            serialized = request_serializer(request)
+            # UpdateSettingsRequest{settings{custom_eye_color{hue:0.2 saturation:0.8 enabled:true}}}
+            assert serialized == (
+                b"\x0a\x0e"
+                b"\x1a\x0c"
+                b"\x0d\xcd\xcc\x4c\x3e"
+                b"\x15\xcd\xcc\x4c\x3f"
+                b"\x18\x01"
+            )
+            self.unary_calls.append(path)
+
+            class FakeResponse:
+                code = 0
+
+            return FakeResponse()
+
+    client = FakeClient()
+    hue, saturation = asyncio.run(
+        update_custom_eye_color(client, hue=0.2, saturation=0.8, timeout=5)
+    )
+    assert (hue, saturation) == (0.2, 0.8)
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+    ]
+
+
+def test_update_custom_eye_color_falls_back_to_set_eye_color_when_update_settings_fails() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.rpc_calls: list[str] = []
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del request, kwargs
+            assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+            raise VectorProtocolError("Custom eye color not supported via UpdateSettings")
 
         async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
             del kwargs
-            self.calls.append(method_name)
+            self.rpc_calls.append(method_name)
             assert method_name == "SetEyeColor"
             assert request.hue == pytest.approx(0.2)
             assert request.saturation == pytest.approx(0.8)
@@ -256,7 +299,7 @@ def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
         update_custom_eye_color(client, hue=0.2, saturation=0.8, timeout=5)
     )
     assert (hue, saturation) == (0.2, 0.8)
-    assert client.calls == ["SetEyeColor"]
+    assert client.rpc_calls == ["SetEyeColor"]
 
 
 def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
@@ -269,11 +312,12 @@ def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
             self.unary_calls: list[str] = []
 
         async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
-            del kwargs
+            del request, kwargs
             self.unary_calls.append(path)
+            if path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings":
+                raise VectorProtocolError("Custom eye color not supported via UpdateSettings")
+
             assert path == "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
-            assert request.hue == pytest.approx(0.2)
-            assert request.saturation == pytest.approx(0.8)
 
             class FakeResponse:
                 pass
@@ -285,7 +329,10 @@ def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
         update_custom_eye_color(client, hue=0.2, saturation=0.8, timeout=5)
     )
     assert (hue, saturation) == (0.2, 0.8)
-    assert client.unary_calls == ["/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"]
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings",
+        "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor",
+    ]
 
 
 def test_update_custom_eye_color_rejects_out_of_range_values() -> None:
