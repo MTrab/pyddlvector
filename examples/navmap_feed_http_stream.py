@@ -83,6 +83,7 @@ class SharedFrame:
     update_event: asyncio.Event = field(default_factory=asyncio.Event)
     latest_robot_pose: NavMapRobotPose | None = None
     latest_charger_pose: NavMapRobotPose | None = None
+    active_origin_id: int | None = None
 
 
 async def _read_request_headers(reader: asyncio.StreamReader) -> bytes:
@@ -198,6 +199,7 @@ async def _produce_frames(
         if lock_origin:
             if active_origin_id is None:
                 active_origin_id = frame.origin_id
+                shared.active_origin_id = active_origin_id
                 print(f"Locked navmap origin: {active_origin_id}")
             elif frame.origin_id != active_origin_id:
                 if pending_origin_id == frame.origin_id:
@@ -213,6 +215,7 @@ async def _produce_frames(
                     f"(confirmed {pending_origin_count} frames)",
                 )
                 active_origin_id = pending_origin_id
+                shared.active_origin_id = active_origin_id
                 pending_origin_id = None
                 pending_origin_count = 0
             else:
@@ -260,6 +263,9 @@ async def _consume_robot_state(
                 if event_type == "robot_state":
                     pose = nav_map_robot_pose_from_state(event.robot_state)
                     if pose is not None:
+                        locked_origin = shared.active_origin_id
+                        if locked_origin is not None and int(pose.origin_id) != locked_origin:
+                            continue
                         shared.latest_robot_pose = pose
                     continue
 
@@ -282,11 +288,15 @@ async def _consume_robot_state(
                 if charger_pose is None:
                     continue
                 try:
-                    shared.latest_charger_pose = NavMapRobotPose(
+                    charger_pose = NavMapRobotPose(
                         origin_id=int(charger_pose.origin_id),
                         x_mm=float(charger_pose.x),
                         y_mm=float(charger_pose.y),
                     )
+                    locked_origin = shared.active_origin_id
+                    if locked_origin is not None and int(charger_pose.origin_id) != locked_origin:
+                        continue
+                    shared.latest_charger_pose = charger_pose
                 except (AttributeError, TypeError, ValueError):
                     continue
         finally:
