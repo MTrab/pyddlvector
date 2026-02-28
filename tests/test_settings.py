@@ -176,6 +176,32 @@ def test_update_eye_color_preset_falls_back_to_update_settings_path() -> None:
     ]
 
 
+def test_update_eye_color_preset_retries_when_update_in_progress() -> None:
+    class FakeClient:
+        class Stub:
+            UpdateSettings = object()
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.calls: list[str] = []
+            self._responses = [1, 0]
+
+        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs, request
+            self.calls.append(method_name)
+            assert method_name == "UpdateSettings"
+
+            class FakeResponse:
+                code = self._responses.pop(0)
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_eye_color_preset(client, "purple", timeout=5))
+    assert selected == "purple"
+    assert client.calls == ["UpdateSettings", "UpdateSettings"]
+
+
 def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
     class FakeClient:
         class Stub:
@@ -298,3 +324,29 @@ def test_update_master_volume_mute_falls_back_to_update_settings_path() -> None:
     assert client.unary_calls == [
         "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
     ]
+
+
+def test_update_master_volume_mute_retries_when_update_in_progress() -> None:
+    class FakeClient:
+        class Stub:
+            UpdateSettings = object()
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.calls: list[str] = []
+            self._responses = [1, 0]
+
+        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs, request
+            self.calls.append(method_name)
+            assert method_name == "UpdateSettings"
+
+            class FakeResponse:
+                code = self._responses.pop(0)
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_master_volume(client, "mute", timeout=5))
+    assert selected == "mute"
+    assert client.calls == ["UpdateSettings", "UpdateSettings"]

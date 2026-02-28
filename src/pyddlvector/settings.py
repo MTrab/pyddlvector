@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,8 @@ from .messaging import protocol
 
 _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
 _UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+_UPDATE_SETTINGS_MAX_ATTEMPTS = 4
+_UPDATE_SETTINGS_RETRY_DELAY_SECONDS = 0.25
 _VOLUME_OPTIONS: tuple[str, ...] = (
     "mute",
     "low",
@@ -294,13 +297,15 @@ async def update_eye_color_preset(
             eye_color=protocol.EyeColor.Value(enum_name),
         )
     )
-    response = await _call_update_settings(client, request, timeout=timeout)
-
-    accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
-    response_code = getattr(response, "code", None)
-    if response_code is not None and int(response_code) != accepted:
+    response = await _call_update_settings_until_accepted(
+        client,
+        request,
+        timeout=timeout,
+        error_prefix="Eye color preset update was not accepted by robot",
+    )
+    if response is None:
         raise VectorProtocolError(
-            f"Eye color preset update was not accepted by robot: code={response_code}"
+            "Eye color preset update did not return a response payload"
         )
 
     return normalized
@@ -338,12 +343,14 @@ async def _update_master_volume_via_update_settings(
             master_volume=protocol.Volume.Value(normalized.upper()),
         )
     )
-    response = await _call_update_settings(client, request, timeout=timeout)
-
-    accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
-    response_code = getattr(response, "code", None)
-    if response_code is not None and int(response_code) != accepted:
-        raise VectorProtocolError(f"Volume update was not accepted by robot: code={response_code}")
+    response = await _call_update_settings_until_accepted(
+        client,
+        request,
+        timeout=timeout,
+        error_prefix="Volume update was not accepted by robot",
+    )
+    if response is None:
+        raise VectorProtocolError("Volume update did not return a response payload")
 
     return normalized
 
@@ -384,3 +391,35 @@ def _should_fallback_to_update_settings_path(
         return True
     status_code = getattr(err, "status_code", None)
     return str(status_code) == "StatusCode.UNIMPLEMENTED"
+
+
+async def _call_update_settings_until_accepted(
+    client: VectorClient[Any],
+    request: Any,
+    *,
+    timeout: float | None,
+    error_prefix: str,
+) -> Any:
+    accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
+    update_in_progress = protocol.ResultCode.Value("ERROR_UPDATE_IN_PROGRESS")
+
+    for attempt in range(1, _UPDATE_SETTINGS_MAX_ATTEMPTS + 1):
+        response = await _call_update_settings(client, request, timeout=timeout)
+        response_code = getattr(response, "code", None)
+        if response_code is None:
+            return response
+
+        numeric_code = int(response_code)
+        if numeric_code == accepted:
+            return response
+
+        if (
+            numeric_code == update_in_progress
+            and attempt < _UPDATE_SETTINGS_MAX_ATTEMPTS
+        ):
+            await asyncio.sleep(_UPDATE_SETTINGS_RETRY_DELAY_SECONDS * attempt)
+            continue
+
+        raise VectorProtocolError(f"{error_prefix}: code={response_code}")
+
+    raise VectorProtocolError(f"{error_prefix}: exhausted retries")
