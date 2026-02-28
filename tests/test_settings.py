@@ -202,6 +202,34 @@ def test_update_eye_color_preset_retries_when_update_in_progress() -> None:
     assert client.calls == ["UpdateSettings", "UpdateSettings"]
 
 
+def test_update_eye_color_preset_teal_serializes_explicit_zero_enum_field() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            request_serializer = kwargs["request_serializer"]
+            serialized = request_serializer(request)
+            assert serialized == b"\x0a\x02\x10\x00"
+            self.unary_calls.append(path)
+
+            class FakeResponse:
+                code = 0
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_eye_color_preset(client, "teal", timeout=5))
+    assert selected == "teal"
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+    ]
+
+
 def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
     class FakeClient:
         class Stub:

@@ -15,6 +15,9 @@ _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
 _UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
 _UPDATE_SETTINGS_MAX_ATTEMPTS = 4
 _UPDATE_SETTINGS_RETRY_DELAY_SECONDS = 0.25
+# UpdateSettingsRequest{settings{eye_color: TIP_OVER_TEAL}} serialized with explicit
+# field presence for proto3 enum default value 0.
+_UPDATE_SETTINGS_TEAL_REQUEST_BYTES = b"\x0a\x02\x10\x00"
 _VOLUME_OPTIONS: tuple[str, ...] = (
     "mute",
     "low",
@@ -292,17 +295,26 @@ async def update_eye_color_preset(
     normalized = normalize_eye_color_preset(value)
     enum_name = _EYE_COLOR_PRESET_TO_ENUM[normalized]
 
-    request = protocol.UpdateSettingsRequest(
-        settings=protocol.RobotSettingsConfig(
-            eye_color=protocol.EyeColor.Value(enum_name),
+    if normalized == "teal":
+        response = await _call_update_settings_until_accepted(
+            client,
+            protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
+            timeout=timeout,
+            error_prefix="Eye color preset update was not accepted by robot",
+            send_update_settings=_call_update_settings_with_explicit_teal,
         )
-    )
-    response = await _call_update_settings_until_accepted(
-        client,
-        request,
-        timeout=timeout,
-        error_prefix="Eye color preset update was not accepted by robot",
-    )
+    else:
+        request = protocol.UpdateSettingsRequest(
+            settings=protocol.RobotSettingsConfig(
+                eye_color=protocol.EyeColor.Value(enum_name),
+            )
+        )
+        response = await _call_update_settings_until_accepted(
+            client,
+            request,
+            timeout=timeout,
+            error_prefix="Eye color preset update was not accepted by robot",
+        )
     if response is None:
         raise VectorProtocolError(
             "Eye color preset update did not return a response payload"
@@ -399,12 +411,14 @@ async def _call_update_settings_until_accepted(
     *,
     timeout: float | None,
     error_prefix: str,
+    send_update_settings: Any | None = None,
 ) -> Any:
+    sender = send_update_settings or _call_update_settings
     accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
     update_in_progress = protocol.ResultCode.Value("ERROR_UPDATE_IN_PROGRESS")
 
     for attempt in range(1, _UPDATE_SETTINGS_MAX_ATTEMPTS + 1):
-        response = await _call_update_settings(client, request, timeout=timeout)
+        response = await sender(client, request, timeout=timeout)
         response_code = getattr(response, "code", None)
         if response_code is None:
             return response
@@ -423,3 +437,22 @@ async def _call_update_settings_until_accepted(
         raise VectorProtocolError(f"{error_prefix}: code={response_code}")
 
     raise VectorProtocolError(f"{error_prefix}: exhausted retries")
+
+
+async def _call_update_settings_with_explicit_teal(
+    client: VectorClient[Any],
+    request: Any,
+    *,
+    timeout: float | None = None,
+) -> Any:
+    return await client.unary_unary(
+        _UPDATE_SETTINGS_PATH,
+        request,
+        request_serializer=_serialize_update_settings_teal,
+        response_deserializer=protocol.UpdateSettingsResponse.FromString,
+        timeout=timeout,
+    )
+
+
+def _serialize_update_settings_teal(_: Any) -> bytes:
+    return _UPDATE_SETTINGS_TEAL_REQUEST_BYTES
