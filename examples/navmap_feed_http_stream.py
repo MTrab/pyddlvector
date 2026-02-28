@@ -84,6 +84,8 @@ class SharedFrame:
     latest_robot_pose: NavMapRobotPose | None = None
     latest_charger_pose: NavMapRobotPose | None = None
     active_origin_id: int | None = None
+    robot_pose_by_origin: dict[int, NavMapRobotPose] = field(default_factory=dict)
+    charger_pose_by_origin: dict[int, NavMapRobotPose] = field(default_factory=dict)
 
 
 async def _read_request_headers(reader: asyncio.StreamReader) -> bytes:
@@ -185,6 +187,18 @@ async def _produce_frames(
     pending_origin_count = 0
     switch_threshold = max(1, int(origin_switch_confirmation))
 
+    def _robot_pose_provider() -> NavMapRobotPose | None:
+        active_origin = shared.active_origin_id
+        if active_origin is None:
+            return shared.latest_robot_pose
+        return shared.robot_pose_by_origin.get(active_origin)
+
+    def _charger_pose_provider() -> NavMapRobotPose | None:
+        active_origin = shared.active_origin_id
+        if active_origin is None:
+            return shared.latest_charger_pose
+        return shared.charger_pose_by_origin.get(active_origin)
+
     async for frame in iter_nav_map_frames(
         client,
         frequency=frequency,
@@ -193,8 +207,8 @@ async def _produce_frames(
         read_timeout=read_timeout,
         reconnect_delay=reconnect_delay,
         center_content=True,
-        robot_pose_provider=lambda: shared.latest_robot_pose,
-        charger_pose_provider=lambda: shared.latest_charger_pose,
+        robot_pose_provider=_robot_pose_provider,
+        charger_pose_provider=_charger_pose_provider,
     ):
         if lock_origin:
             if active_origin_id is None:
@@ -263,10 +277,8 @@ async def _consume_robot_state(
                 if event_type == "robot_state":
                     pose = nav_map_robot_pose_from_state(event.robot_state)
                     if pose is not None:
-                        locked_origin = shared.active_origin_id
-                        if locked_origin is not None and int(pose.origin_id) != locked_origin:
-                            continue
                         shared.latest_robot_pose = pose
+                        shared.robot_pose_by_origin[int(pose.origin_id)] = pose
                     continue
 
                 if event_type != "object_event":
@@ -293,10 +305,8 @@ async def _consume_robot_state(
                         x_mm=float(charger_pose.x),
                         y_mm=float(charger_pose.y),
                     )
-                    locked_origin = shared.active_origin_id
-                    if locked_origin is not None and int(charger_pose.origin_id) != locked_origin:
-                        continue
                     shared.latest_charger_pose = charger_pose
+                    shared.charger_pose_by_origin[int(charger_pose.origin_id)] = charger_pose
                 except (AttributeError, TypeError, ValueError):
                     continue
         finally:
