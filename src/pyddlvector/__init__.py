@@ -18,6 +18,13 @@ from .exceptions import (
     VectorTimeoutError,
 )
 from .fleet import VectorFleet
+from .navmap import (
+    NavMapFrame,
+    NavMapRobotPose,
+    extract_nav_map_frame,
+    iter_nav_map_frames,
+    nav_map_robot_pose_from_state,
+)
 from .provisioning import (
     authenticate_robot_guid,
     fetch_cert_for_official_serial,
@@ -44,6 +51,8 @@ __all__ = [
     "VectorClient",
     "VectorFleet",
     "CameraFrame",
+    "NavMapFrame",
+    "NavMapRobotPose",
     "describe_robot_activity",
     "VectorAuthenticationError",
     "VectorConfigurationError",
@@ -58,6 +67,9 @@ __all__ = [
     "fetch_cert_for_wirepod_serial",
     "fetch_cert_from_robot_tls",
     "extract_camera_frame",
+    "extract_nav_map_frame",
+    "iter_nav_map_frames",
+    "nav_map_robot_pose_from_state",
     "fetch_official_session_token",
     "fetch_lifetime_statistics",
     "fetch_eye_color",

@@ -60,8 +60,49 @@ Imported from `pyddlvector` top-level:
 - `fetch_master_volume`, `update_master_volume`, `normalize_master_volume`
 - `parse_stimulation_info`
 - `extract_camera_frame`
+- `extract_nav_map_frame`, `iter_nav_map_frames`, `nav_map_robot_pose_from_state`
 - `messaging`
 - Exception types under `pyddlvector.exceptions`
+
+## NavMap Rendering Legend
+
+Used by `extract_nav_map_frame` and `iter_nav_map_frames`.
+
+Note: `NavMapFeed` itself does not expose a dedicated charger nav-node type. Charger visualization is an overlay when a charger pose is available from object events.
+
+### Nav node colors
+
+| Nav node type | Human label | Hex | RGB | Meaning |
+|---|---|---|---|---|
+| `NAV_NODE_UNKNOWN` | Unknown / unmapped | `#181C23` | `24,28,35` | Area without reliable classification yet |
+| `NAV_NODE_CLEAR_OF_OBSTACLE` | Clear floor | `#D4E0E7` | `212,224,231` | Free path; no obstacle detected |
+| `NAV_NODE_CLEAR_OF_CLIFF` | Cliff-safe floor | `#B3CDE0` | `179,205,224` | Floor marked safe with respect to cliffs |
+| `NAV_NODE_OBSTACLE_CUBE` | Cube obstacle | `#FABF57` | `250,191,87` | Obstacle related to cube/lightcube |
+| `NAV_NODE_OBSTACLE_PROXIMITY` | Proximity obstacle | `#E05F5F` | `224,95,95` | Obstacle detected by proximity sensor |
+| `NAV_NODE_OBSTACLE_PROXIMITY_EXPLORED` | Explored obstacle | `#BF7858` | `191,120,88` | Previously observed proximity obstacle |
+| `NAV_NODE_OBSTACLE_UNRECOGNIZED` | Unknown obstacle | `#B278BC` | `178,120,188` | Obstacle detected but not classified |
+| `NAV_NODE_CLIFF` | Cliff / drop | `#141418` | `20,20,24` | Cliff/drop area the robot should avoid |
+| `NAV_NODE_INTERESTING_EDGE` | Interesting edge | `#78D9C3` | `120,217,195` | Edge considered relevant by the system |
+| `NAV_NODE_NON_INTERESTING_EDGE` | Non-interesting edge | `#7391A3` | `115,145,163` | Edge considered less relevant |
+
+### Robot overlay colors
+
+When `RobotState.pose` is in the same `origin_id` as the nav map:
+
+| Overlay element | Human label | Hex | RGB | Meaning |
+|---|---|---|---|---|
+| `Robot marker core` | Robot center | `#FF00FF` | `255,0,255` | Robot position (center point) |
+| `Robot marker outline` | Marker ring | `#FFFFFF` | `255,255,255` | High-contrast outline around center |
+| `Robot front arrow` | Front direction arrow | `#000000` | `0,0,0` | Small arrow on the marker ring indicating front direction |
+
+### Charger overlay colors
+
+When charger pose is available in the same `origin_id` as the nav map:
+
+| Overlay element | Human label | Hex | RGB | Meaning |
+|---|---|---|---|---|
+| `Charger marker core` | Charger center | `#00B4FF` | `0,180,255` | Charger position overlay |
+| `Charger marker outline` | Charger ring | `#000000` | `0,0,0` | Contrast outline around charger marker |
 
 ## Quickstart: Async Client
 
