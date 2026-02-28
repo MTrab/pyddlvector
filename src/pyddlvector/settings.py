@@ -13,6 +13,7 @@ from .messaging import protocol
 
 _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
 _UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+_SET_EYE_COLOR_PATH = "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
 _UPDATE_SETTINGS_MAX_ATTEMPTS = 4
 _UPDATE_SETTINGS_RETRY_DELAY_SECONDS = 0.25
 # UpdateSettingsRequest{settings{eye_color: TIP_OVER_TEAL}} serialized with explicit
@@ -340,7 +341,7 @@ async def update_custom_eye_color(
         hue=float(hue),
         saturation=float(saturation),
     )
-    await client.rpc("SetEyeColor", request, timeout=timeout)
+    await _call_set_eye_color(client, request, timeout=timeout)
     return float(hue), float(saturation)
 
 
@@ -456,3 +457,24 @@ async def _call_update_settings_with_explicit_teal(
 
 def _serialize_update_settings_teal(_: Any) -> bytes:
     return _UPDATE_SETTINGS_TEAL_REQUEST_BYTES
+
+
+async def _call_set_eye_color(
+    client: VectorClient[Any],
+    request: Any,
+    *,
+    timeout: float | None = None,
+) -> Any:
+    if hasattr(client, "rpc"):
+        try:
+            return await client.rpc("SetEyeColor", request, timeout=timeout)
+        except (VectorProtocolError, VectorRPCError) as err:
+            if not _should_fallback_to_update_settings_path(err):
+                raise
+    return await client.unary_unary(
+        _SET_EYE_COLOR_PATH,
+        request,
+        request_serializer=protocol.SetEyeColorRequest.SerializeToString,
+        response_deserializer=protocol.SetEyeColorResponse.FromString,
+        timeout=timeout,
+    )

@@ -259,6 +259,35 @@ def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
     assert client.calls == ["SetEyeColor"]
 
 
+def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            self.unary_calls.append(path)
+            assert path == "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
+            assert request.hue == pytest.approx(0.2)
+            assert request.saturation == pytest.approx(0.8)
+
+            class FakeResponse:
+                pass
+
+            return FakeResponse()
+
+    client = FakeClient()
+    hue, saturation = asyncio.run(
+        update_custom_eye_color(client, hue=0.2, saturation=0.8, timeout=5)
+    )
+    assert (hue, saturation) == (0.2, 0.8)
+    assert client.unary_calls == ["/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"]
+
+
 def test_update_custom_eye_color_rejects_out_of_range_values() -> None:
     class FakeClient:
         class Stub:
