@@ -33,8 +33,9 @@ _NODE_COLOR_MAP: dict[int, tuple[int, int, int]] = {
 _FALLBACK_NODE_COLOR = (80, 80, 88)
 _ROBOT_MARKER_CORE = (255, 0, 255)  # magenta
 _ROBOT_MARKER_OUTLINE = (255, 255, 255)  # white
-_ROBOT_HEADING_CORE = (0, 255, 255)  # cyan
-_ROBOT_HEADING_OUTLINE = (0, 0, 0)  # black
+_ROBOT_FRONT_ARROW = (0, 0, 0)  # black
+_CHARGER_MARKER_CORE = (0, 180, 255)  # cyan-blue
+_CHARGER_MARKER_OUTLINE = (0, 0, 0)  # black
 _RECOVERABLE_STREAM_ERRORS = {
     grpc.StatusCode.CANCELLED,
     grpc.StatusCode.DEADLINE_EXCEEDED,
@@ -87,7 +88,9 @@ async def iter_nav_map_frames(
     read_timeout: float = 10.0,
     reconnect_delay: float = 1.0,
     min_coverage_ratio: float = _MIN_COVERAGE_RATIO,
+    center_content: bool = False,
     robot_pose_provider: Callable[[], NavMapRobotPose | None] | None = None,
+    charger_pose_provider: Callable[[], NavMapRobotPose | None] | None = None,
 ) -> AsyncIterator[NavMapFrame]:
     """Yield parsed nav map frames from a reconnecting NavMapFeed stream."""
     request = protocol.NavMapFeedRequest(frequency=frequency)
@@ -125,7 +128,11 @@ async def iter_nav_map_frames(
                     response,
                     max_side=max_side,
                     min_coverage_ratio=min_coverage_ratio,
+                    center_content=center_content,
                     robot_pose=robot_pose,
+                    charger_pose=None
+                    if charger_pose_provider is None
+                    else charger_pose_provider(),
                 )
                 if frame is not None:
                     yield frame
@@ -193,7 +200,9 @@ def extract_nav_map_frame(
     *,
     max_side: int = _DEFAULT_MAX_SIDE,
     min_coverage_ratio: float = _MIN_COVERAGE_RATIO,
+    center_content: bool = False,
     robot_pose: NavMapRobotPose | None = None,
+    charger_pose: NavMapRobotPose | None = None,
 ) -> NavMapFrame | None:
     """Extract a rasterized PNG nav map frame from a ``NavMapFeedResponse`` payload."""
     map_info = getattr(response, "map_info", None)
@@ -237,14 +246,32 @@ def extract_nav_map_frame(
         return None
 
     rgb = bytearray(_rasterize_leaf_nodes(leaf_nodes, side=side, root_cells=root_cells))
-    if robot_pose is not None:
-        _overlay_robot_pose_marker(
+    if charger_pose is not None:
+        _overlay_nav_pose_marker(
             rgb,
             side=side,
             map_info=map_info,
             response_origin_id=int(getattr(response, "origin_id", 0)),
-            robot_pose=robot_pose,
+            pose=charger_pose,
+            core_color=_CHARGER_MARKER_CORE,
+            outline_color=_CHARGER_MARKER_OUTLINE,
+            radius=max(2, side // 48),
+            draw_heading_arrow=False,
         )
+    if robot_pose is not None:
+        _overlay_nav_pose_marker(
+            rgb,
+            side=side,
+            map_info=map_info,
+            response_origin_id=int(getattr(response, "origin_id", 0)),
+            pose=robot_pose,
+            core_color=_ROBOT_MARKER_CORE,
+            outline_color=_ROBOT_MARKER_OUTLINE,
+            radius=max(3, side // 44),
+            draw_heading_arrow=True,
+        )
+    if center_content:
+        rgb = _center_content_in_frame(rgb, side=side)
     return NavMapFrame(
         origin_id=int(getattr(response, "origin_id", 0)),
         width=side,
@@ -334,15 +361,19 @@ def _clamp(value: int, lower: int, upper: int) -> int:
     return max(lower, min(upper, value))
 
 
-def _overlay_robot_pose_marker(
+def _overlay_nav_pose_marker(
     rgb: bytearray,
     *,
     side: int,
     map_info: Any,
     response_origin_id: int,
-    robot_pose: NavMapRobotPose,
+    pose: NavMapRobotPose,
+    core_color: tuple[int, int, int],
+    outline_color: tuple[int, int, int],
+    radius: int,
+    draw_heading_arrow: bool,
 ) -> None:
-    if int(robot_pose.origin_id) != int(response_origin_id):
+    if int(pose.origin_id) != int(response_origin_id):
         return
     root_size_mm = float(getattr(map_info, "root_size_mm", 0.0))
     if root_size_mm <= 0.0:
@@ -352,8 +383,8 @@ def _overlay_robot_pose_marker(
 
     min_x = root_center_x - (root_size_mm * 0.5)
     min_y = root_center_y - (root_size_mm * 0.5)
-    norm_x = (robot_pose.x_mm - min_x) / root_size_mm
-    norm_y = (robot_pose.y_mm - min_y) / root_size_mm
+    norm_x = (pose.x_mm - min_x) / root_size_mm
+    norm_y = (pose.y_mm - min_y) / root_size_mm
     if not (0.0 <= norm_x <= 1.0 and 0.0 <= norm_y <= 1.0):
         return
 
@@ -361,129 +392,57 @@ def _overlay_robot_pose_marker(
     py_map = _clamp(int(norm_y * side), 0, side - 1)
     py = (side - 1) - py_map
 
-    radius = max(3, side // 44)
-    _draw_disc(rgb, side, px, py, radius + 3, _ROBOT_HEADING_OUTLINE)
-    _draw_disc(rgb, side, px, py, radius + 1, _ROBOT_MARKER_OUTLINE)
-    _draw_disc(rgb, side, px, py, radius, _ROBOT_MARKER_CORE)
-    if robot_pose.yaw_rad is None:
+    _draw_disc(rgb, side, px, py, radius + 1, outline_color)
+    _draw_disc(rgb, side, px, py, radius, core_color)
+    if not draw_heading_arrow or pose.yaw_rad is None:
         return
 
-    heading_len = max(6, radius * 4, side // 12)
-    hx = int(round(px + (math.cos(robot_pose.yaw_rad) * heading_len)))
-    hy = int(round(py - (math.sin(robot_pose.yaw_rad) * heading_len)))
-    _draw_line_thick(
-        rgb,
-        side,
-        px,
-        py,
-        hx,
-        hy,
-        thickness=3,
-        color=_ROBOT_HEADING_OUTLINE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        px,
-        py,
-        hx,
-        hy,
-        thickness=2,
-        color=_ROBOT_MARKER_OUTLINE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        px,
-        py,
-        hx,
-        hy,
-        thickness=1,
-        color=_ROBOT_HEADING_CORE,
-    )
+    ring_radius = radius + 1
+    tip_x = int(round(px + (math.cos(pose.yaw_rad) * ring_radius)))
+    tip_y = int(round(py - (math.sin(pose.yaw_rad) * ring_radius)))
+    tail_radius = max(1, radius - 1)
+    tail_x = int(round(px + (math.cos(pose.yaw_rad) * tail_radius)))
+    tail_y = int(round(py - (math.sin(pose.yaw_rad) * tail_radius)))
 
-    # Arrow head for clearer heading direction.
-    head_len = max(3, radius * 2)
-    head_spread = math.radians(20.0)
-    left_x = int(
-        round(
-            hx - (math.cos(robot_pose.yaw_rad - head_spread) * head_len),
-        )
-    )
-    left_y = int(
-        round(
-            hy + (math.sin(robot_pose.yaw_rad - head_spread) * head_len),
-        )
-    )
-    right_x = int(
-        round(
-            hx - (math.cos(robot_pose.yaw_rad + head_spread) * head_len),
-        )
-    )
-    right_y = int(
-        round(
-            hy + (math.sin(robot_pose.yaw_rad + head_spread) * head_len),
-        )
+    # Small front arrow that stays on the marker ring.
+    wing_len = max(2, radius)
+    wing_spread = math.radians(35.0)
+    left_angle = pose.yaw_rad + math.pi - wing_spread
+    right_angle = pose.yaw_rad + math.pi + wing_spread
+    left_x = int(round(tip_x + (math.cos(left_angle) * wing_len)))
+    left_y = int(round(tip_y - (math.sin(left_angle) * wing_len)))
+    right_x = int(round(tip_x + (math.cos(right_angle) * wing_len)))
+    right_y = int(round(tip_y - (math.sin(right_angle) * wing_len)))
+
+    _draw_line_thick(
+        rgb,
+        side,
+        tail_x,
+        tail_y,
+        tip_x,
+        tip_y,
+        thickness=1,
+        color=_ROBOT_FRONT_ARROW,
     )
     _draw_line_thick(
         rgb,
         side,
-        hx,
-        hy,
-        left_x,
-        left_y,
-        thickness=2,
-        color=_ROBOT_HEADING_OUTLINE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        hx,
-        hy,
-        right_x,
-        right_y,
-        thickness=2,
-        color=_ROBOT_HEADING_OUTLINE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        hx,
-        hy,
+        tip_x,
+        tip_y,
         left_x,
         left_y,
         thickness=1,
-        color=_ROBOT_MARKER_OUTLINE,
+        color=_ROBOT_FRONT_ARROW,
     )
     _draw_line_thick(
         rgb,
         side,
-        hx,
-        hy,
+        tip_x,
+        tip_y,
         right_x,
         right_y,
         thickness=1,
-        color=_ROBOT_MARKER_OUTLINE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        hx,
-        hy,
-        left_x,
-        left_y,
-        thickness=1,
-        color=_ROBOT_HEADING_CORE,
-    )
-    _draw_line_thick(
-        rgb,
-        side,
-        hx,
-        hy,
-        right_x,
-        right_y,
-        thickness=1,
-        color=_ROBOT_HEADING_CORE,
+        color=_ROBOT_FRONT_ARROW,
     )
 
 
@@ -564,3 +523,53 @@ def _draw_line_thick(
                 y1 + offset_y,
                 color,
             )
+
+
+def _center_content_in_frame(rgb: bytearray, *, side: int) -> bytearray:
+    unknown = _NODE_COLOR_MAP[int(protocol.NAV_NODE_UNKNOWN)]
+    min_x = side
+    min_y = side
+    max_x = -1
+    max_y = -1
+
+    for y in range(side):
+        for x in range(side):
+            idx = (y * side + x) * 3
+            pixel = (rgb[idx], rgb[idx + 1], rgb[idx + 2])
+            if pixel == unknown:
+                continue
+            if x < min_x:
+                min_x = x
+            if y < min_y:
+                min_y = y
+            if x > max_x:
+                max_x = x
+            if y > max_y:
+                max_y = y
+
+    if max_x < min_x or max_y < min_y:
+        return rgb
+
+    content_cx = (min_x + max_x) // 2
+    content_cy = (min_y + max_y) // 2
+    frame_cx = side // 2
+    frame_cy = side // 2
+    shift_x = frame_cx - content_cx
+    shift_y = frame_cy - content_cy
+    if shift_x == 0 and shift_y == 0:
+        return rgb
+
+    out = bytearray(side * side * 3)
+    _fill_full_image(out, side, unknown)
+    for y in range(side):
+        ny = y + shift_y
+        if ny < 0 or ny >= side:
+            continue
+        for x in range(side):
+            nx = x + shift_x
+            if nx < 0 or nx >= side:
+                continue
+            src = (y * side + x) * 3
+            dst = (ny * side + nx) * 3
+            out[dst : dst + 3] = rgb[src : src + 3]
+    return out

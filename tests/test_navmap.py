@@ -126,9 +126,70 @@ def test_extract_nav_map_frame_can_overlay_robot_pose_marker() -> None:
     marker_pixels = 0
     for idx in range(0, len(pixels), 3):
         rgb = (pixels[idx], pixels[idx + 1], pixels[idx + 2])
-        if rgb in {(255, 0, 255), (0, 255, 255), (255, 255, 255)}:
+        if rgb in {(255, 0, 255), (255, 255, 255), (0, 0, 0)}:
             marker_pixels += 1
     assert marker_pixels > 0
+
+
+def test_extract_nav_map_frame_can_overlay_charger_marker() -> None:
+    response = SimpleNamespace(
+        origin_id=7,
+        map_info=SimpleNamespace(
+            root_depth=8,
+            root_size_mm=200.0,
+            root_center_x=0.0,
+            root_center_y=0.0,
+        ),
+        quad_infos=[SimpleNamespace(content=1, depth=8)],
+    )
+    charger_pose = SimpleNamespace(origin_id=7, x_mm=0.0, y_mm=0.0, yaw_rad=None)
+
+    frame = extract_nav_map_frame(response, max_side=64, charger_pose=charger_pose)
+
+    assert frame is not None
+    _, _, pixels = _decode_png_rgb(frame.data)
+    marker_pixels = 0
+    for idx in range(0, len(pixels), 3):
+        rgb = (pixels[idx], pixels[idx + 1], pixels[idx + 2])
+        if rgb in {(0, 180, 255), (0, 0, 0)}:
+            marker_pixels += 1
+    assert marker_pixels > 0
+
+
+def test_extract_nav_map_frame_can_center_content() -> None:
+    response = SimpleNamespace(
+        origin_id=9,
+        map_info=SimpleNamespace(
+            root_depth=1,
+            root_size_mm=200.0,
+            root_center_x=0.0,
+            root_center_y=0.0,
+        ),
+        quad_infos=[
+            SimpleNamespace(content=0, depth=0),
+            SimpleNamespace(content=0, depth=0),
+            SimpleNamespace(content=0, depth=0),
+            SimpleNamespace(content=1, depth=0),
+        ],
+    )
+
+    frame = extract_nav_map_frame(response, max_side=8, center_content=True)
+
+    assert frame is not None
+    width, height, pixels = _decode_png_rgb(frame.data)
+    assert (width, height) == (2, 2)
+    unknown = (24, 28, 35)
+    coords: list[tuple[int, int]] = []
+    for y in range(height):
+        for x in range(width):
+            if _pixel(pixels, width, x, y) != unknown:
+                coords.append((x, y))
+    # Without centering this would only hit the bottom-right corner.
+    assert coords
+    avg_x = sum(x for x, _ in coords) / len(coords)
+    avg_y = sum(y for _, y in coords) / len(coords)
+    assert abs(avg_x - ((width - 1) / 2)) <= 0.5
+    assert abs(avg_y - ((height - 1) / 2)) <= 0.5
 
 
 def _decode_png_rgb(data: bytes) -> tuple[int, int, bytes]:

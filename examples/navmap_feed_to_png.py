@@ -91,6 +91,7 @@ async def main() -> int:
             read_timeout=args.timeout,
             reconnect_delay=args.reconnect_delay,
             min_coverage_ratio=args.min_coverage,
+            center_content=True,
         ):
             file_path = output_dir / f"navmap_{written:04d}.png"
             file_path.write_bytes(frame.data)

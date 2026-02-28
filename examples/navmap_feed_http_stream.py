@@ -56,6 +56,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reconnect-delay", type=float, default=1.0)
     parser.add_argument("--stream-fps", type=float, default=5.0)
     parser.add_argument("--frame-mime", choices=["jpeg", "png"], default="jpeg")
+    parser.add_argument(
+        "--lock-origin",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep stream on one navmap origin to avoid transient map rotation/jumps.",
+    )
+    parser.add_argument(
+        "--origin-switch-confirmation",
+        type=int,
+        default=3,
+        help=(
+            "Consecutive frames required before accepting a new origin "
+            "when lock-origin is enabled."
+        ),
+    )
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     return parser.parse_args()
@@ -67,6 +82,7 @@ class SharedFrame:
     frame_content_type: str = "image/png"
     update_event: asyncio.Event = field(default_factory=asyncio.Event)
     latest_robot_pose: NavMapRobotPose | None = None
+    latest_charger_pose: NavMapRobotPose | None = None
 
 
 async def _read_request_headers(reader: asyncio.StreamReader) -> bytes:
@@ -142,6 +158,8 @@ async def _produce_frames(
     min_coverage_ratio: float,
     read_timeout: float,
     reconnect_delay: float,
+    lock_origin: bool,
+    origin_switch_confirmation: int,
 ) -> None:
     jpeg_encoder = None
     if frame_mime == "jpeg":
@@ -161,6 +179,11 @@ async def _produce_frames(
 
         jpeg_encoder = _encode_jpeg
 
+    active_origin_id: int | None = None
+    pending_origin_id: int | None = None
+    pending_origin_count = 0
+    switch_threshold = max(1, int(origin_switch_confirmation))
+
     async for frame in iter_nav_map_frames(
         client,
         frequency=frequency,
@@ -168,8 +191,34 @@ async def _produce_frames(
         min_coverage_ratio=min_coverage_ratio,
         read_timeout=read_timeout,
         reconnect_delay=reconnect_delay,
+        center_content=True,
         robot_pose_provider=lambda: shared.latest_robot_pose,
+        charger_pose_provider=lambda: shared.latest_charger_pose,
     ):
+        if lock_origin:
+            if active_origin_id is None:
+                active_origin_id = frame.origin_id
+                print(f"Locked navmap origin: {active_origin_id}")
+            elif frame.origin_id != active_origin_id:
+                if pending_origin_id == frame.origin_id:
+                    pending_origin_count += 1
+                else:
+                    pending_origin_id = frame.origin_id
+                    pending_origin_count = 1
+                if pending_origin_count < switch_threshold:
+                    continue
+                print(
+                    "Switching navmap origin: "
+                    f"{active_origin_id} -> {pending_origin_id} "
+                    f"(confirmed {pending_origin_count} frames)",
+                )
+                active_origin_id = pending_origin_id
+                pending_origin_id = None
+                pending_origin_count = 0
+            else:
+                pending_origin_id = None
+                pending_origin_count = 0
+
         payload = frame.data if jpeg_encoder is None else jpeg_encoder(frame.data)
         shared.latest_image = payload
         shared.frame_content_type = "image/png" if jpeg_encoder is None else "image/jpeg"
@@ -207,11 +256,39 @@ async def _consume_robot_state(
                 if not getattr(event_response, "HasField", lambda _f: False)("event"):
                     continue
                 event = event_response.event
-                if getattr(event, "WhichOneof", lambda _name: None)("event_type") != "robot_state":
+                event_type = getattr(event, "WhichOneof", lambda _name: None)("event_type")
+                if event_type == "robot_state":
+                    pose = nav_map_robot_pose_from_state(event.robot_state)
+                    if pose is not None:
+                        shared.latest_robot_pose = pose
                     continue
-                pose = nav_map_robot_pose_from_state(event.robot_state)
-                if pose is not None:
-                    shared.latest_robot_pose = pose
+
+                if event_type != "object_event":
+                    continue
+                object_event = event.object_event
+                object_event_type = getattr(
+                    object_event,
+                    "WhichOneof",
+                    lambda _name: None,
+                )("object_event_type")
+                if object_event_type != "robot_observed_object":
+                    continue
+                observed_object = object_event.robot_observed_object
+                if int(getattr(observed_object, "object_type", 0)) != int(
+                    messaging.protocol.CHARGER_BASIC
+                ):
+                    continue
+                charger_pose = getattr(observed_object, "pose", None)
+                if charger_pose is None:
+                    continue
+                try:
+                    shared.latest_charger_pose = NavMapRobotPose(
+                        origin_id=int(charger_pose.origin_id),
+                        x_mm=float(charger_pose.x),
+                        y_mm=float(charger_pose.y),
+                    )
+                except (AttributeError, TypeError, ValueError):
+                    continue
         finally:
             if pending_read is not None and not pending_read.done():
                 pending_read.cancel()
@@ -273,6 +350,8 @@ async def main() -> int:
             min_coverage_ratio=args.min_coverage,
             read_timeout=args.timeout,
             reconnect_delay=args.reconnect_delay,
+            lock_origin=args.lock_origin,
+            origin_switch_confirmation=args.origin_switch_confirmation,
         ),
     )
     pose_task = asyncio.create_task(
@@ -293,6 +372,7 @@ async def main() -> int:
     print("Connected to robot:", robot.name, robot.ip, f"(local host: {local_host})")
     print(f"NavMap stream endpoint: http://{args.bind}:{args.port}/ ({args.frame_mime})")
     print(f"Min coverage threshold: {args.min_coverage:.2f}")
+    print(f"Origin lock enabled: {args.lock_origin}")
 
     try:
         async with server:

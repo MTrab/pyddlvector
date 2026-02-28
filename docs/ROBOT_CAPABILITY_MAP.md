@@ -115,20 +115,8 @@ Kilde: `messages.proto::RobotState` (leveres via `Event.robot_state`).
 
 ### 2.5 NavMap farve-legend (human-readable)
 
-Farverne nedenfor bruges af `extract_nav_map_frame`/`iter_nav_map_frames` ved rendering af `NavMapFeed`.
-
-| Nav node type | Human label | Hex | RGB | Betydning |
-|---|---|---|---|---|
-| `NAV_NODE_UNKNOWN` | Unknown / unmapped | `#181C23` | `24,28,35` | Omraade uden sikker klassifikation endnu |
-| `NAV_NODE_CLEAR_OF_OBSTACLE` | Clear floor | `#D4E0E7` | `212,224,231` | Fri passage, ingen forhindring registreret |
-| `NAV_NODE_CLEAR_OF_CLIFF` | Cliff-safe floor | `#B3CDE0` | `179,205,224` | Gulv markeret som sikkert ift. kant/cliff |
-| `NAV_NODE_OBSTACLE_CUBE` | Cube obstacle | `#FABF57` | `250,191,87` | Hindring relateret til cube/lightcube |
-| `NAV_NODE_OBSTACLE_PROXIMITY` | Proximity obstacle | `#E05F5F` | `224,95,95` | Hindring fundet via proximity sensor |
-| `NAV_NODE_OBSTACLE_PROXIMITY_EXPLORED` | Explored obstacle | `#BF7858` | `191,120,88` | Tidligere observeret proximity-hindring |
-| `NAV_NODE_OBSTACLE_UNRECOGNIZED` | Unknown obstacle | `#B278BC` | `178,120,188` | Hindring registreret, men ikke klassificeret |
-| `NAV_NODE_CLIFF` | Cliff / drop | `#141418` | `20,20,24` | Kant/afgrund hvor robotten boer undgaa koersel |
-| `NAV_NODE_INTERESTING_EDGE` | Interesting edge | `#78D9C3` | `120,217,195` | Edge som systemet vurderer relevant |
-| `NAV_NODE_NON_INTERESTING_EDGE` | Non-interesting edge | `#7391A3` | `115,145,163` | Edge som er mindre relevant |
+The primary human-readable legend is documented in `README.md` under:
+- `NavMap Rendering Legend`
 
 ## 3) Event types (komplet oneof i `shared.proto::Event`)
 
