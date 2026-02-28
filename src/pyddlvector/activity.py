@@ -167,7 +167,6 @@ class RobotActivityTracker:
             if activity in {
                 "Exploring",
                 "Ready",
-                "Exploring from charger",
                 "Picking or placing object",
             }:
                 return recent_search_activity
@@ -181,7 +180,6 @@ class RobotActivityTracker:
             activity in {
                 "Exploring",
                 "Ready",
-                "Exploring from charger",
                 "Picking or placing object",
             }
             and self._last_action_activity is not None

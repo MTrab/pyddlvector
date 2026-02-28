@@ -260,6 +260,32 @@ def test_describe_robot_activity_sleeping() -> None:
     assert activity == "Sleeping"
 
 
+def test_tracker_does_not_override_on_charger_before_sleep_transition() -> None:
+    tracker = RobotActivityTracker(search_signal_window_seconds=3.0, action_hold_seconds=4.0)
+    tracker.observe_event(
+        _Event(
+            "object_event",
+            _ObjectEvent(
+                "robot_observed_object",
+                SimpleNamespace(object_type=int(protocol.BLOCK_LIGHTCUBE1)),
+            ),
+        ),
+        now_monotonic=10.0,
+    )
+
+    on_charger = int(protocol.ROBOT_STATUS_IS_ON_CHARGER)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=on_charger), now_monotonic=10.5)
+        == "Exploring from charger"
+    )
+
+    sleeping = int(protocol.ROBOT_STATUS_CALM_POWER_MODE)
+    assert (
+        tracker.activity_from_robot_state(_robot_state(status=sleeping), now_monotonic=10.8)
+        == "Sleeping"
+    )
+
+
 def test_describe_robot_activity_fallback_is_ready_not_idle() -> None:
     activity = describe_robot_activity(_robot_state())
     assert activity == "Ready"
