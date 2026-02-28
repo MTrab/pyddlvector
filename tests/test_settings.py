@@ -4,7 +4,6 @@ import asyncio
 
 import pytest
 
-import pyddlvector.settings as settings_module
 from pyddlvector.exceptions import VectorProtocolError
 from pyddlvector.settings import (
     fetch_eye_color,
@@ -287,50 +286,6 @@ def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
     )
     assert (hue, saturation) == (0.2, 0.8)
     assert client.unary_calls == ["/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"]
-
-
-def test_update_custom_eye_color_uses_http_update_settings_when_robot_config_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeRobot:
-        ip = "192.168.1.50"
-        port = 443
-        guid = "guid-token"
-
-        @staticmethod
-        def trusted_certs() -> bytes:
-            return b"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
-
-    class FakeClient:
-        class Stub:
-            pass
-
-        def __init__(self) -> None:
-            self.stub = self.Stub()
-            self.robot = FakeRobot()
-            self.rpc_calls: list[str] = []
-
-        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
-            del request, kwargs
-            self.rpc_calls.append(method_name)
-            raise VectorProtocolError("Stub does not expose RPC method 'SetEyeColor'")
-
-    async def _fake_http_update(*args, **kwargs):  # type: ignore[no-untyped-def]
-        del args, kwargs
-        return None
-
-    monkeypatch.setattr(
-        settings_module,
-        "_update_custom_eye_color_via_http_update_settings",
-        _fake_http_update,
-    )
-
-    client = FakeClient()
-    hue, saturation = asyncio.run(
-        update_custom_eye_color(client, hue=0.2, saturation=0.8, timeout=5)
-    )
-    assert (hue, saturation) == (0.2, 0.8)
-    assert client.rpc_calls == []
 
 
 def test_update_custom_eye_color_rejects_out_of_range_values() -> None:

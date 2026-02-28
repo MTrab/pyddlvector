@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import ssl
 from dataclasses import dataclass
 from typing import Any
-
-import httpx
 
 from .client import VectorClient
 from .exceptions import VectorProtocolError, VectorRPCError
@@ -17,7 +14,6 @@ from .messaging import protocol
 _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
 _UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
 _SET_EYE_COLOR_PATH = "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
-_UPDATE_SETTINGS_HTTP_PATH = "/v1/update_settings"
 _UPDATE_SETTINGS_MAX_ATTEMPTS = 4
 _UPDATE_SETTINGS_RETRY_DELAY_SECONDS = 0.25
 # UpdateSettingsRequest{settings{eye_color: TIP_OVER_TEAL}} serialized with explicit
@@ -341,27 +337,12 @@ async def update_custom_eye_color(
     if not (0.0 <= saturation <= 1.0):
         raise VectorProtocolError("Custom eye color saturation must be between 0.0 and 1.0")
 
-    normalized_hue = float(hue)
-    normalized_saturation = float(saturation)
-
-    if hasattr(client, "robot"):
-        try:
-            await _update_custom_eye_color_via_http_update_settings(
-                client,
-                hue=normalized_hue,
-                saturation=normalized_saturation,
-                timeout=timeout,
-            )
-            return normalized_hue, normalized_saturation
-        except (VectorProtocolError, VectorRPCError):
-            pass
-
     request = protocol.SetEyeColorRequest(
-        hue=normalized_hue,
-        saturation=normalized_saturation,
+        hue=float(hue),
+        saturation=float(saturation),
     )
     await _call_set_eye_color(client, request, timeout=timeout)
-    return normalized_hue, normalized_saturation
+    return float(hue), float(saturation)
 
 
 async def _update_master_volume_via_update_settings(
@@ -497,61 +478,3 @@ async def _call_set_eye_color(
         response_deserializer=protocol.SetEyeColorResponse.FromString,
         timeout=timeout,
     )
-
-
-async def _update_custom_eye_color_via_http_update_settings(
-    client: VectorClient[Any],
-    *,
-    hue: float,
-    saturation: float,
-    timeout: float | None,
-) -> None:
-    robot = client.robot
-    cert_bytes = robot.trusted_certs()
-    try:
-        cert_pem = cert_bytes.decode("utf-8")
-    except UnicodeDecodeError as err:
-        raise VectorProtocolError("Robot certificate is not valid PEM text") from err
-
-    context = ssl.create_default_context()
-    context.load_verify_locations(cadata=cert_pem)
-    # Robot TLS certificate CN/SAN may not match direct IP access; trust is pinned
-    # to the robot cert, so disable hostname enforcement for this HTTPS call.
-    context.check_hostname = False
-
-    payload = {
-        "update_settings": True,
-        "settings": {
-            "custom_eye_color": {
-                "enabled": True,
-                "hue": hue,
-                "saturation": saturation,
-            }
-        },
-    }
-    headers = {
-        "Authorization": f"Bearer {robot.guid}",
-        "Content-Type": "application/json",
-    }
-    url = f"https://{robot.ip}:{robot.port}{_UPDATE_SETTINGS_HTTP_PATH}"
-    effective_timeout = timeout if timeout is not None else 10.0
-    try:
-        async with httpx.AsyncClient(verify=context, timeout=effective_timeout) as http_client:
-            response = await http_client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-    except httpx.TimeoutException as err:
-        raise VectorRPCError(
-            f"HTTP call '{_UPDATE_SETTINGS_HTTP_PATH}' timed out",
-            status_code="TIMEOUT",
-            details=f"Timed out after {effective_timeout:.2f}s",
-        ) from err
-    except httpx.HTTPStatusError as err:
-        raise VectorProtocolError(
-            f"HTTP update_settings rejected custom eye color: {err.response.status_code}"
-        ) from err
-    except httpx.HTTPError as err:
-        raise VectorRPCError(
-            f"HTTP call '{_UPDATE_SETTINGS_HTTP_PATH}' failed",
-            status_code="HTTP_ERROR",
-            details=str(err),
-        ) from err
