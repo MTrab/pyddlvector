@@ -17,9 +17,6 @@ _UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/Updat
 _SET_EYE_COLOR_PATH = "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
 _UPDATE_SETTINGS_MAX_ATTEMPTS = 4
 _UPDATE_SETTINGS_RETRY_DELAY_SECONDS = 0.25
-# UpdateSettingsRequest{settings{eye_color: TIP_OVER_TEAL}} serialized with explicit
-# field presence for proto3 enum default value 0.
-_UPDATE_SETTINGS_TEAL_REQUEST_BYTES = b"\x0a\x02\x10\x00"
 _VOLUME_OPTIONS: tuple[str, ...] = (
     "mute",
     "low",
@@ -295,28 +292,15 @@ async def update_eye_color_preset(
 ) -> str:
     """Update robot eye color preset and return canonical selected preset."""
     normalized = normalize_eye_color_preset(value)
-    enum_name = _EYE_COLOR_PRESET_TO_ENUM[normalized]
+    enum_value = int(protocol.EyeColor.Value(_EYE_COLOR_PRESET_TO_ENUM[normalized]))
 
-    if normalized == "teal":
-        response = await _call_update_settings_until_accepted(
-            client,
-            protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
-            timeout=timeout,
-            error_prefix="Eye color preset update was not accepted by robot",
-            send_update_settings=_call_update_settings_with_explicit_teal,
-        )
-    else:
-        request = protocol.UpdateSettingsRequest(
-            settings=protocol.RobotSettingsConfig(
-                eye_color=protocol.EyeColor.Value(enum_name),
-            )
-        )
-        response = await _call_update_settings_until_accepted(
-            client,
-            request,
-            timeout=timeout,
-            error_prefix="Eye color preset update was not accepted by robot",
-        )
+    response = await _call_update_settings_until_accepted(
+        client,
+        protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
+        timeout=timeout,
+        error_prefix="Eye color preset update was not accepted by robot",
+        send_update_settings=_build_update_settings_eye_color_preset_sender(enum_value),
+    )
     if response is None:
         raise VectorProtocolError(
             "Eye color preset update did not return a response payload"
@@ -462,23 +446,39 @@ async def _call_update_settings_until_accepted(
     raise VectorProtocolError(f"{error_prefix}: exhausted retries")
 
 
-async def _call_update_settings_with_explicit_teal(
-    client: VectorClient[Any],
-    request: Any,
-    *,
-    timeout: float | None = None,
-) -> Any:
-    return await client.unary_unary(
-        _UPDATE_SETTINGS_PATH,
-        request,
-        request_serializer=_serialize_update_settings_teal,
-        response_deserializer=protocol.UpdateSettingsResponse.FromString,
-        timeout=timeout,
+def _build_update_settings_eye_color_preset_sender(eye_color_enum_value: int):
+    payload = _serialize_update_settings_eye_color_preset(eye_color_enum_value)
+
+    async def _send(client: VectorClient[Any], request: Any, *, timeout: float | None = None):
+        return await client.unary_unary(
+            _UPDATE_SETTINGS_PATH,
+            request,
+            request_serializer=lambda _request: payload,
+            response_deserializer=protocol.UpdateSettingsResponse.FromString,
+            timeout=timeout,
+        )
+
+    return _send
+
+
+def _serialize_update_settings_eye_color_preset(eye_color_enum_value: int) -> bytes:
+    # Match wire-pod preset behavior by setting both eye_color and
+    # custom_eye_color (empty message) to disable custom mode.
+    settings_payload = b"".join(
+        (
+            _encode_key(2, 0),
+            _encode_varint(eye_color_enum_value),
+            _encode_key(3, 2),
+            b"\x00",
+        )
     )
-
-
-def _serialize_update_settings_teal(_: Any) -> bytes:
-    return _UPDATE_SETTINGS_TEAL_REQUEST_BYTES
+    return b"".join(
+        (
+            _encode_key(1, 2),
+            _encode_varint(len(settings_payload)),
+            settings_payload,
+        )
+    )
 
 
 def _build_update_settings_custom_eye_color_sender(

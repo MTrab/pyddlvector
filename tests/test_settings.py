@@ -122,20 +122,21 @@ def test_update_master_volume_uses_set_master_volume_rpc() -> None:
     assert selected == "medium_high"
 
 
-def test_update_eye_color_preset_uses_update_settings_rpc() -> None:
+def test_update_eye_color_preset_serializes_eye_color_and_disables_custom_mode() -> None:
     class FakeClient:
         class Stub:
             pass
 
         def __init__(self) -> None:
             self.stub = self.Stub()
-            self.calls: list[str] = []
+            self.unary_calls: list[str] = []
 
-        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
-            del kwargs
-            self.calls.append(method_name)
-            assert method_name == "UpdateSettings"
-            assert request.settings.eye_color == 5
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            request_serializer = kwargs["request_serializer"]
+            serialized = request_serializer(request)
+            # UpdateSettingsRequest{settings{eye_color:5, custom_eye_color:{}}}
+            assert serialized == b"\x0a\x04\x10\x05\x1a\x00"
+            self.unary_calls.append(path)
 
             class FakeResponse:
                 code = 0
@@ -145,7 +146,9 @@ def test_update_eye_color_preset_uses_update_settings_rpc() -> None:
     client = FakeClient()
     selected = asyncio.run(update_eye_color_preset(client, "purple", timeout=5))
     assert selected == "purple"
-    assert client.calls == ["UpdateSettings"]
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+    ]
 
 
 def test_update_eye_color_preset_falls_back_to_update_settings_path() -> None:
@@ -158,10 +161,11 @@ def test_update_eye_color_preset_falls_back_to_update_settings_path() -> None:
             self.unary_calls: list[str] = []
 
         async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
-            del kwargs
+            request_serializer = kwargs["request_serializer"]
+            serialized = request_serializer(request)
             self.unary_calls.append(path)
             assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
-            assert request.settings.eye_color == 4
+            assert serialized == b"\x0a\x04\x10\x04\x1a\x00"
 
             class FakeResponse:
                 code = 0
@@ -183,13 +187,13 @@ def test_update_eye_color_preset_retries_when_update_in_progress() -> None:
 
         def __init__(self) -> None:
             self.stub = self.Stub()
-            self.calls: list[str] = []
+            self.unary_calls: list[str] = []
             self._responses = [1, 0]
 
-        async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
-            del kwargs, request
-            self.calls.append(method_name)
-            assert method_name == "UpdateSettings"
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del request, kwargs
+            self.unary_calls.append(path)
+            assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
 
             class FakeResponse:
                 code = self._responses.pop(0)
@@ -199,10 +203,13 @@ def test_update_eye_color_preset_retries_when_update_in_progress() -> None:
     client = FakeClient()
     selected = asyncio.run(update_eye_color_preset(client, "purple", timeout=5))
     assert selected == "purple"
-    assert client.calls == ["UpdateSettings", "UpdateSettings"]
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings",
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings",
+    ]
 
 
-def test_update_eye_color_preset_teal_serializes_explicit_zero_enum_field() -> None:
+def test_update_eye_color_preset_teal_serializes_zero_enum_and_disables_custom_mode() -> None:
     class FakeClient:
         class Stub:
             pass
@@ -214,7 +221,7 @@ def test_update_eye_color_preset_teal_serializes_explicit_zero_enum_field() -> N
         async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
             request_serializer = kwargs["request_serializer"]
             serialized = request_serializer(request)
-            assert serialized == b"\x0a\x02\x10\x00"
+            assert serialized == b"\x0a\x04\x10\x00\x1a\x00"
             self.unary_calls.append(path)
 
             class FakeResponse:
