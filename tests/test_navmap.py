@@ -192,6 +192,53 @@ def test_extract_nav_map_frame_can_center_content() -> None:
     assert abs(avg_y - ((height - 1) / 2)) <= 0.5
 
 
+def test_centering_ignores_overlay_marker_pixels() -> None:
+    response = SimpleNamespace(
+        origin_id=10,
+        map_info=SimpleNamespace(
+            root_depth=5,
+            root_size_mm=200.0,
+            root_center_x=0.0,
+            root_center_y=0.0,
+        ),
+        quad_infos=[SimpleNamespace(content=1, depth=0)],
+    )
+    robot_pose = SimpleNamespace(origin_id=10, x_mm=-95.0, y_mm=-95.0, yaw_rad=0.0)
+
+    frame_without_marker = extract_nav_map_frame(
+        response,
+        max_side=32,
+        min_coverage_ratio=0.0,
+        center_content=True,
+    )
+    frame_with_marker = extract_nav_map_frame(
+        response,
+        max_side=32,
+        min_coverage_ratio=0.0,
+        center_content=True,
+        robot_pose=robot_pose,
+    )
+
+    assert frame_without_marker is not None
+    assert frame_with_marker is not None
+    width_a, height_a, pixels_a = _decode_png_rgb(frame_without_marker.data)
+    width_b, height_b, pixels_b = _decode_png_rgb(frame_with_marker.data)
+    assert (width_a, height_a) == (width_b, height_b)
+
+    nav_color = (212, 224, 231)
+    nav_pixels_a: set[tuple[int, int]] = set()
+    nav_pixels_b: set[tuple[int, int]] = set()
+    for y in range(height_a):
+        for x in range(width_a):
+            if _pixel(pixels_a, width_a, x, y) == nav_color:
+                nav_pixels_a.add((x, y))
+            if _pixel(pixels_b, width_b, x, y) == nav_color:
+                nav_pixels_b.add((x, y))
+
+    assert nav_pixels_a
+    assert nav_pixels_a == nav_pixels_b
+
+
 def _decode_png_rgb(data: bytes) -> tuple[int, int, bytes]:
     assert data.startswith(b"\x89PNG\r\n\x1a\n")
     cursor = 8

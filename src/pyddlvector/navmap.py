@@ -36,6 +36,13 @@ _ROBOT_MARKER_OUTLINE = (255, 255, 255)  # white
 _ROBOT_FRONT_ARROW = (0, 0, 0)  # black
 _CHARGER_MARKER_CORE = (0, 180, 255)  # cyan-blue
 _CHARGER_MARKER_OUTLINE = (0, 0, 0)  # black
+_OVERLAY_MARKER_COLORS = {
+    _ROBOT_MARKER_CORE,
+    _ROBOT_MARKER_OUTLINE,
+    _ROBOT_FRONT_ARROW,
+    _CHARGER_MARKER_CORE,
+    _CHARGER_MARKER_OUTLINE,
+}
 _RECOVERABLE_STREAM_ERRORS = {
     grpc.StatusCode.CANCELLED,
     grpc.StatusCode.DEADLINE_EXCEEDED,
@@ -536,7 +543,7 @@ def _center_content_in_frame(rgb: bytearray, *, side: int) -> bytearray:
         for x in range(side):
             idx = (y * side + x) * 3
             pixel = (rgb[idx], rgb[idx + 1], rgb[idx + 2])
-            if pixel == unknown:
+            if pixel == unknown or pixel in _OVERLAY_MARKER_COLORS:
                 continue
             if x < min_x:
                 min_x = x
