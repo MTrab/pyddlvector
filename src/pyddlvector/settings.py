@@ -11,6 +11,7 @@ from .exceptions import VectorProtocolError, VectorRPCError
 from .messaging import protocol
 
 _PULL_JDOCS_PATH = "/Anki.Vector.external_interface.ExternalInterface/PullJdocs"
+_UPDATE_SETTINGS_PATH = "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
 _VOLUME_OPTIONS: tuple[str, ...] = (
     "mute",
     "low",
@@ -293,7 +294,7 @@ async def update_eye_color_preset(
             eye_color=protocol.EyeColor.Value(enum_name),
         )
     )
-    response = await client.rpc("UpdateSettings", request, timeout=timeout)
+    response = await _call_update_settings(client, request, timeout=timeout)
 
     accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
     response_code = getattr(response, "code", None)
@@ -337,7 +338,7 @@ async def _update_master_volume_via_update_settings(
             master_volume=protocol.Volume.Value(normalized.upper()),
         )
     )
-    response = await client.rpc("UpdateSettings", request, timeout=timeout)
+    response = await _call_update_settings(client, request, timeout=timeout)
 
     accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
     response_code = getattr(response, "code", None)
@@ -351,5 +352,35 @@ def _should_fallback_to_update_settings(err: VectorProtocolError | VectorRPCErro
     if isinstance(err, VectorProtocolError):
         return True
 
+    status_code = getattr(err, "status_code", None)
+    return str(status_code) == "StatusCode.UNIMPLEMENTED"
+
+
+async def _call_update_settings(
+    client: VectorClient[Any],
+    request: Any,
+    *,
+    timeout: float | None = None,
+) -> Any:
+    if hasattr(client, "rpc"):
+        try:
+            return await client.rpc("UpdateSettings", request, timeout=timeout)
+        except (VectorProtocolError, VectorRPCError) as err:
+            if not _should_fallback_to_update_settings_path(err):
+                raise
+    return await client.unary_unary(
+        _UPDATE_SETTINGS_PATH,
+        request,
+        request_serializer=protocol.UpdateSettingsRequest.SerializeToString,
+        response_deserializer=protocol.UpdateSettingsResponse.FromString,
+        timeout=timeout,
+    )
+
+
+def _should_fallback_to_update_settings_path(
+    err: VectorProtocolError | VectorRPCError,
+) -> bool:
+    if isinstance(err, VectorProtocolError):
+        return True
     status_code = getattr(err, "status_code", None)
     return str(status_code) == "StatusCode.UNIMPLEMENTED"

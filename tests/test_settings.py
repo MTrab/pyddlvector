@@ -148,6 +148,34 @@ def test_update_eye_color_preset_uses_update_settings_rpc() -> None:
     assert client.calls == ["UpdateSettings"]
 
 
+def test_update_eye_color_preset_falls_back_to_update_settings_path() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            self.unary_calls.append(path)
+            assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+            assert request.settings.eye_color == 4
+
+            class FakeResponse:
+                code = 0
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_eye_color_preset(client, "azure_blue", timeout=5))
+    assert selected == "azure_blue"
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+    ]
+
+
 def test_update_custom_eye_color_uses_set_eye_color_rpc() -> None:
     class FakeClient:
         class Stub:
@@ -242,3 +270,31 @@ def test_update_master_volume_mute_uses_update_settings_directly() -> None:
     selected = asyncio.run(update_master_volume(client, "mute", timeout=5))
     assert selected == "mute"
     assert client.calls == ["UpdateSettings"]
+
+
+def test_update_master_volume_mute_falls_back_to_update_settings_path() -> None:
+    class FakeClient:
+        class Stub:
+            pass
+
+        def __init__(self) -> None:
+            self.stub = self.Stub()
+            self.unary_calls: list[str] = []
+
+        async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
+            del kwargs
+            self.unary_calls.append(path)
+            assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+            assert request.settings.master_volume == 0
+
+            class FakeResponse:
+                code = 0
+
+            return FakeResponse()
+
+    client = FakeClient()
+    selected = asyncio.run(update_master_volume(client, "mute", timeout=5))
+    assert selected == "mute"
+    assert client.unary_calls == [
+        "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
+    ]
