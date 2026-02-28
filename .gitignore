@@ -84,3 +84,6 @@ __pypackages__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local generated assets
+navmap_frames/

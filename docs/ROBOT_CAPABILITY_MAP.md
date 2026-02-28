@@ -24,6 +24,11 @@ Denne fil kortlaegger robotmulighederne i `pyddlvector` og underliggende Vector 
 | `extract_robot_telemetry` | function | RO | Yes | Udtraekker telemetry fra `RobotState` |
 | `CameraFrame` | dataclass | RO | Yes | Normaliseret JPEG frame |
 | `extract_camera_frame` | function | RO | Yes | Parser `CameraFeedResponse` |
+| `NavMapFrame` | dataclass | RO | Yes | Normaliseret PNG navmap frame |
+| `NavMapRobotPose` | dataclass | RO | Yes | Normaliseret robot-pose til navmap overlay |
+| `extract_nav_map_frame` | function | RO | Yes | Parser/rasterizer `NavMapFeedResponse` |
+| `nav_map_robot_pose_from_state` | function | RO | Yes | Udleder navmap-kompatibel pose fra `RobotState` |
+| `iter_nav_map_frames` | async generator | RO | Yes | Reconnecting `NavMapFeed` frame stream (valgfri robot-markor) |
 | `RobotStimulation` | dataclass | RO | Yes | Normaliseret stimulation payload |
 | `parse_stimulation_info` | function | RO | Yes | Parser stimulation event |
 | `RobotStatistics` | dataclass | RO | Yes | Normaliserede lifetime stats |
@@ -107,6 +112,23 @@ Kilde: `messages.proto::RobotState` (leveres via `Event.robot_state`).
 | `ThumbnailResponse` | `success,image` | RO |
 | `CubesAvailableResponse` | `factory_ids[]` | RO |
 | `PullJdocsResponse` | `named_jdocs[]` | RO |
+
+### 2.5 NavMap farve-legend (human-readable)
+
+Farverne nedenfor bruges af `extract_nav_map_frame`/`iter_nav_map_frames` ved rendering af `NavMapFeed`.
+
+| Nav node type | Human label | Hex | RGB | Betydning |
+|---|---|---|---|---|
+| `NAV_NODE_UNKNOWN` | Unknown / unmapped | `#181C23` | `24,28,35` | Omraade uden sikker klassifikation endnu |
+| `NAV_NODE_CLEAR_OF_OBSTACLE` | Clear floor | `#D4E0E7` | `212,224,231` | Fri passage, ingen forhindring registreret |
+| `NAV_NODE_CLEAR_OF_CLIFF` | Cliff-safe floor | `#B3CDE0` | `179,205,224` | Gulv markeret som sikkert ift. kant/cliff |
+| `NAV_NODE_OBSTACLE_CUBE` | Cube obstacle | `#FABF57` | `250,191,87` | Hindring relateret til cube/lightcube |
+| `NAV_NODE_OBSTACLE_PROXIMITY` | Proximity obstacle | `#E05F5F` | `224,95,95` | Hindring fundet via proximity sensor |
+| `NAV_NODE_OBSTACLE_PROXIMITY_EXPLORED` | Explored obstacle | `#BF7858` | `191,120,88` | Tidligere observeret proximity-hindring |
+| `NAV_NODE_OBSTACLE_UNRECOGNIZED` | Unknown obstacle | `#B278BC` | `178,120,188` | Hindring registreret, men ikke klassificeret |
+| `NAV_NODE_CLIFF` | Cliff / drop | `#141418` | `20,20,24` | Kant/afgrund hvor robotten boer undgaa koersel |
+| `NAV_NODE_INTERESTING_EDGE` | Interesting edge | `#78D9C3` | `120,217,195` | Edge som systemet vurderer relevant |
+| `NAV_NODE_NON_INTERESTING_EDGE` | Non-interesting edge | `#7391A3` | `115,145,163` | Edge som er mindre relevant |
 
 ## 3) Event types (komplet oneof i `shared.proto::Event`)
 
@@ -213,7 +235,7 @@ Alle kan kaldes via `VectorClient.rpc()`/`run()`.
 | `CaptureSingleImage` | `CaptureSingleImageRequest` -> `CaptureSingleImageResponse` | RO | No (generic via VectorClient) |  |
 | `GetCameraConfig` | `CameraConfigRequest` -> `CameraConfigResponse` | RO | No (generic via VectorClient) |  |
 | `SetEyeColor` | `SetEyeColorRequest` -> `SetEyeColorResponse` | RW | No (generic via VectorClient) |  |
-| `NavMapFeed` | `NavMapFeedRequest` -> `stream NavMapFeedResponse` | Stream (RO) | No (generic via VectorClient) |  |
+| `NavMapFeed` | `NavMapFeedRequest` -> `stream NavMapFeedResponse` | Stream (RO) | Partial (`extract_nav_map_frame`, `iter_nav_map_frames`) |  |
 | `SetCameraSettings` | `SetCameraSettingsRequest` -> `SetCameraSettingsResponse` | RW | No (generic via VectorClient) |  |
 | `AppIntent` | `AppIntentRequest` -> `AppIntentResponse` | RW | No (generic via VectorClient) |  |
 | `UpdateSettings` | `UpdateSettingsRequest` -> `UpdateSettingsResponse` | RW | Yes (update_master_volume fallback) |  |
@@ -240,6 +262,7 @@ Alle kan kaldes via `VectorClient.rpc()`/`run()`.
 - Activity klassifikation (state->menneskevenlig tekst).
 - Telemetry model (roll/pitch/yaw, lift, accel, gyro) + filtrering.
 - Camera frame parsing.
+- NavMap frame parsing/rasterization.
 - Stimulation parsing.
 - Volume + lifetime-statistik wrappers.
 - Provisioning/auth wrappers.
@@ -255,6 +278,7 @@ Alle kan kaldes via `VectorClient.rpc()`/`run()`.
 - `src/pyddlvector/activity.py`
 - `src/pyddlvector/telemetry.py`
 - `src/pyddlvector/camera.py`
+- `src/pyddlvector/navmap.py`
 - `src/pyddlvector/stimulation.py`
 - `src/pyddlvector/settings.py`
 - `src/pyddlvector/statistics.py`
