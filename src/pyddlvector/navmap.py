@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import math
 import struct
 import zlib
@@ -13,8 +12,11 @@ from typing import Any
 
 import grpc
 
+from .exceptions import VectorConnectionError, VectorTimeoutError
 from .messaging import protocol
 
+# Maximum depth used by the robot engine (engine/navMap/quadTree/quadTree.cpp).
+_MAX_ROOT_DEPTH = 8
 _DEFAULT_MAX_SIDE = 256
 _MIN_COVERAGE_RATIO = 0.995
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -73,7 +75,9 @@ class NavMapRobotPose:
 def nav_map_robot_pose_from_state(robot_state: Any) -> NavMapRobotPose | None:
     """Extract robot pose from a RobotState-like payload."""
     pose = getattr(robot_state, "pose", None)
-    if pose is None:
+    if pose is None or (
+        isinstance(robot_state, protocol.RobotState) and not robot_state.HasField("pose")
+    ):
         return None
     try:
         yaw = float(robot_state.pose_angle_rad) if hasattr(robot_state, "pose_angle_rad") else 0.0
@@ -94,62 +98,50 @@ async def iter_nav_map_frames(
     max_side: int = _DEFAULT_MAX_SIDE,
     read_timeout: float = 10.0,
     reconnect_delay: float = 1.0,
+    max_reconnect_attempts: int = 3,
     min_coverage_ratio: float = _MIN_COVERAGE_RATIO,
     center_content: bool = False,
     robot_pose_provider: Callable[[], NavMapRobotPose | None] | None = None,
     charger_pose_provider: Callable[[], NavMapRobotPose | None] | None = None,
 ) -> AsyncIterator[NavMapFrame]:
-    """Yield parsed nav map frames from a reconnecting NavMapFeed stream."""
-    request = protocol.NavMapFeedRequest(frequency=frequency)
+    """Yield map frames and retry up to the limit between usable frames."""
+    if max_reconnect_attempts < 0:
+        raise ValueError("max_reconnect_attempts must be non-negative")
 
+    request = protocol.NavMapFeedRequest(frequency=frequency)
+    reconnect_attempts = 0
     while True:
         stream = client.stub.NavMapFeed(request)
-        pending_read: asyncio.Task[Any] | None = None
+        reason: Exception = VectorConnectionError("Robot closed NavMapFeed")
         try:
             while True:
-                if pending_read is None:
-                    pending_read = asyncio.create_task(stream.read())
-
-                done, _ = await asyncio.wait({pending_read}, timeout=read_timeout)
-                if not done:
-                    # Some robot/bridge stacks keep the stream open but stop emitting.
-                    # Reconnect on idle timeout to recover from stalled streams.
+                response = await asyncio.wait_for(stream.read(), timeout=read_timeout)
+                if response is grpc.aio.EOF or response is None:
                     break
 
-                try:
-                    response = pending_read.result()
-                except asyncio.CancelledError:
-                    break
-                except grpc.aio.AioRpcError as err:
-                    if err.code() in _RECOVERABLE_STREAM_ERRORS:
-                        break
-                    raise
-                finally:
-                    pending_read = None
-
-                if response is None:
-                    break
-
-                robot_pose = None if robot_pose_provider is None else robot_pose_provider()
                 frame = extract_nav_map_frame(
                     response,
                     max_side=max_side,
                     min_coverage_ratio=min_coverage_ratio,
                     center_content=center_content,
-                    robot_pose=robot_pose,
-                    charger_pose=None
-                    if charger_pose_provider is None
-                    else charger_pose_provider(),
+                    robot_pose=None if robot_pose_provider is None else robot_pose_provider(),
+                    charger_pose=None if charger_pose_provider is None else charger_pose_provider(),
                 )
                 if frame is not None:
+                    reconnect_attempts = 0
                     yield frame
+        except TimeoutError:
+            reason = VectorTimeoutError("Robot stopped sending NavMapFeed responses")
+        except grpc.aio.AioRpcError as err:
+            if err.code() not in _RECOVERABLE_STREAM_ERRORS:
+                raise
+            reason = VectorConnectionError(f"NavMapFeed failed with {err.code()}")
         finally:
-            if pending_read is not None and not pending_read.done():
-                pending_read.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await pending_read
             stream.cancel()
 
+        if reconnect_attempts >= max_reconnect_attempts:
+            raise reason
+        reconnect_attempts += 1
         await asyncio.sleep(max(0.0, reconnect_delay))
 
 
@@ -218,7 +210,9 @@ def extract_nav_map_frame(
 
     root_depth = int(getattr(map_info, "root_depth", -1))
     root_size_mm = float(getattr(map_info, "root_size_mm", 0.0))
-    if root_depth < 0 or root_size_mm <= 0.0:
+    if not 0 <= root_depth <= _MAX_ROOT_DEPTH or not math.isfinite(root_size_mm):
+        return None
+    if root_size_mm <= 0.0:
         return None
 
     side = min(max(int(max_side), 1), 1 << root_depth)
@@ -244,10 +238,7 @@ def extract_nav_map_frame(
     if not leaf_nodes:
         return None
     covered_cells = sum(node.grid_size * node.grid_size for node in leaf_nodes)
-    total_cells = root_cells * root_cells
-    if total_cells <= 0:
-        return None
-    coverage_ratio = covered_cells / total_cells
+    coverage_ratio = covered_cells / (root_cells * root_cells)
     if coverage_ratio < float(min_coverage_ratio):
         # Some feeds intermittently emit partial trees; skip those to avoid clipped maps.
         return None
@@ -357,10 +348,7 @@ def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
     crc = zlib.crc32(chunk_type)
     crc = zlib.crc32(payload, crc)
     return (
-        struct.pack("!I", len(payload))
-        + chunk_type
-        + payload
-        + struct.pack("!I", crc & 0xFFFFFFFF)
+        struct.pack("!I", len(payload)) + chunk_type + payload + struct.pack("!I", crc & 0xFFFFFFFF)
     )
 
 

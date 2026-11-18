@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import configparser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .exceptions import VectorConfigurationError
@@ -16,15 +16,15 @@ class RobotConfig:
     serial: str | None
     name: str
     ip: str
-    guid: str
-    cert_file: Path | None = None
-    cert_pem: bytes | None = None
+    guid: str = field(repr=False)
+    cert_file: Path | None = field(default=None, repr=False)
+    cert_pem: bytes | None = field(default=None, repr=False)
     port: int = 443
 
     @property
     def host(self) -> str:
         """Return host:port used for the gRPC target."""
-        return f"{self.ip}:{self.port}"
+        return _grpc_target(self.ip, self.port)
 
     @classmethod
     def from_runtime(
@@ -75,6 +75,12 @@ class RobotConfig:
         if not cert_bytes:
             raise VectorConfigurationError(f"Certificate file is empty: {self.cert_file}")
         return cert_bytes
+
+
+def _grpc_target(host: str, port: int) -> str:
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{host}:{port}"
 
 
 class SdkConfigStore:

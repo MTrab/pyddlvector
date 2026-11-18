@@ -11,12 +11,14 @@ from typing import Any
 import grpc
 import httpx
 
-from .config import RobotConfig
+from .client import _check_response_status
+from .config import RobotConfig, _grpc_target
 from .exceptions import (
     VectorAuthenticationError,
     VectorProvisioningError,
     VectorTimeoutError,
 )
+from .messaging import protocol
 
 DEFAULT_ANKI_ACCOUNTS_URL = "https://accounts.api.anki.com/1/sessions"
 DEFAULT_ANKI_CERT_URL_TEMPLATE = "https://session-certs.token.global.anki-services.com/vic/{serial}"
@@ -54,8 +56,8 @@ async def fetch_official_session_token(
     except (KeyError, TypeError, ValueError) as err:
         raise VectorProvisioningError("Official session token response was malformed") from err
 
-    if not token:
-        raise VectorProvisioningError("Official session token was empty")
+    if not isinstance(token, str) or not token.strip():
+        raise VectorProvisioningError("Official session token was missing or invalid")
 
     return token
 
@@ -92,13 +94,13 @@ async def fetch_cert_from_url(url: str, *, timeout: float = 10.0) -> bytes:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url)
         response.raise_for_status()
-    except httpx.TimeoutException as err:
-        raise VectorTimeoutError(f"Timed out downloading cert from {url}") from err
-    except httpx.HTTPError as err:
-        raise VectorProvisioningError(f"Failed to download cert from {url}: {err}") from err
+    except httpx.TimeoutException:
+        raise VectorTimeoutError("Timed out downloading robot certificate") from None
+    except httpx.HTTPError:
+        raise VectorProvisioningError("Failed to download robot certificate") from None
 
     if not response.content:
-        raise VectorProvisioningError(f"Empty cert payload received from {url}")
+        raise VectorProvisioningError("Received an empty robot certificate")
 
     return bytes(response.content)
 
@@ -108,15 +110,17 @@ async def fetch_cert_from_robot_tls(
     *,
     port: int = 443,
     timeout: float = 10.0,
+    server_name: str | None = None,
+    trusted_cert_pem: bytes | None = None,
 ) -> bytes:
-    """Read server certificate directly from robot TLS endpoint."""
+    """Read the peer certificate after validating it against configured trust."""
 
     def _fetch() -> bytes:
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        context = ssl.create_default_context(
+            cadata=trusted_cert_pem.decode("ascii") if trusted_cert_pem is not None else None
+        )
         with socket.create_connection((hostname, port), timeout=timeout) as raw_sock:
-            with context.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
+            with context.wrap_socket(raw_sock, server_hostname=server_name or hostname) as tls_sock:
                 cert_der = tls_sock.getpeercert(binary_form=True)
         if cert_der is None:
             raise VectorProvisioningError("Robot did not present a TLS certificate")
@@ -124,11 +128,13 @@ async def fetch_cert_from_robot_tls(
         return pem.encode("utf-8")
 
     try:
-        return await asyncio.to_thread(_fetch)
+        return await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=timeout)
     except TimeoutError as err:
-        raise VectorTimeoutError(f"Timed out reading TLS cert from {hostname}:{port}") from err
-    except OSError as err:
-        raise VectorProvisioningError(f"Failed reading TLS cert from {hostname}:{port}") from err
+        raise VectorTimeoutError("Timed out reading the robot TLS certificate") from err
+    except (OSError, ValueError) as err:
+        raise VectorProvisioningError(
+            "Robot TLS certificate retrieval or validation failed"
+        ) from err
 
 
 async def authenticate_robot_guid(
@@ -149,7 +155,7 @@ async def authenticate_robot_guid(
     try:
         channel_creds = grpc.ssl_channel_credentials(root_certificates=cert_pem)
         channel = grpc.aio.secure_channel(
-            f"{ip}:{port}",
+            _grpc_target(ip, port),
             channel_creds,
             options=(("grpc.ssl_target_name_override", name),),
         )
@@ -167,17 +173,29 @@ async def authenticate_robot_guid(
     except TimeoutError as err:
         raise VectorTimeoutError("Timed out while authenticating against robot") from err
     except grpc.RpcError as err:
+        if err.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+            raise VectorTimeoutError("Timed out while authenticating against robot") from err
         raise VectorAuthenticationError("Robot authentication RPC failed") from err
     finally:
         if channel is not None:
             await channel.close()
 
+    _check_response_status(response, "UserAuthentication")
+    code = getattr(response, "code", protocol.UserAuthenticationResponse.AUTHORIZED)
+    if code != protocol.UserAuthenticationResponse.AUTHORIZED:
+        raise VectorAuthenticationError("Robot denied UserAuthentication")
+
     guid = getattr(response, "client_token_guid", None)
     if not guid:
         raise VectorAuthenticationError("Robot auth response did not include a GUID token")
     if isinstance(guid, bytes):
-        return guid.decode("utf-8")
-    return str(guid)
+        try:
+            guid = guid.decode("utf-8")
+        except UnicodeDecodeError:
+            raise VectorAuthenticationError("Robot returned an invalid GUID token") from None
+    if not isinstance(guid, str) or not guid.strip():
+        raise VectorAuthenticationError("Robot returned an invalid GUID token")
+    return guid
 
 
 def derive_name_from_cert(cert_pem: bytes) -> str:
@@ -216,13 +234,14 @@ async def provision_runtime_robot(
     password: str | None = None,
     wirepod_url: str | None = None,
     session_id: str | None = None,
+    cert_pem: bytes | None = None,
     timeout: float = 10.0,
 ) -> RobotConfig:
     """Provision cert+guid at runtime and return a ready RobotConfig.
 
     Supported modes:
     - ``official``: requires ``serial``, ``username``, and ``password``.
-    - ``wirepod``: requires ``serial`` + ``wirepod_url`` or will fallback to robot TLS cert.
+    - ``wirepod``: requires a trusted ``cert_pem`` or ``serial`` and ``wirepod_url``.
     """
     normalized_mode = mode.strip().lower()
     provided_name = name.strip() if isinstance(name, str) else ""
@@ -240,24 +259,24 @@ async def provision_runtime_robot(
             timeout=timeout,
         )
     elif normalized_mode == "wirepod":
-        if wirepod_url and serial:
-            try:
-                cert_pem = await fetch_cert_for_wirepod_serial(
-                    serial,
-                    wirepod_url=wirepod_url,
-                    timeout=timeout,
+        if cert_pem is None:
+            if not wirepod_url or not serial:
+                raise VectorProvisioningError(
+                    "Wire-pod provisioning requires a trusted certificate or serial and wirepod_url"
                 )
-            except (VectorProvisioningError, VectorTimeoutError):
-                # mDNS hostnames (e.g. *.local) often fail in containerized/remote environments.
-                # Fall back to reading the robot's certificate directly from its TLS endpoint.
-                cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
-        else:
-            cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
+            cert_pem = await fetch_cert_for_wirepod_serial(
+                serial, wirepod_url=wirepod_url, timeout=timeout
+            )
         resolved_session_id = session_id or "Anything1"
     else:
         raise VectorProvisioningError(f"Unsupported provisioning mode '{mode}'")
 
-    resolved_name = provided_name or derive_name_from_cert(cert_pem)
+    if not cert_pem:
+        raise VectorProvisioningError("Robot certificate is empty")
+    try:
+        resolved_name = provided_name or await asyncio.to_thread(derive_name_from_cert, cert_pem)
+    except (OSError, ValueError) as err:
+        raise VectorProvisioningError("Could not read the robot certificate") from err
 
     guid = await authenticate_robot_guid(
         ip=ip,

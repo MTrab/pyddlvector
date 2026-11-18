@@ -8,6 +8,7 @@ from pyddlvector.exceptions import (
     VectorAuthenticationError,
     VectorProvisioningError,
 )
+from pyddlvector.messaging import protocol
 from pyddlvector.provisioning import (
     authenticate_robot_guid,
     derive_name_from_cert,
@@ -233,47 +234,31 @@ async def test_provision_runtime_robot_requires_official_credentials() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wirepod_falls_back_to_robot_tls_when_url_fetch_fails(
+async def test_wirepod_rejects_failed_certificate_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def failing_wirepod_fetch(
-        serial: str,
-        *,
-        wirepod_url: str,
-        timeout: float = 10.0,
-    ) -> bytes:
-        del serial, wirepod_url, timeout
+    async def failing_wirepod_fetch(*args, **kwargs) -> bytes:
         raise VectorProvisioningError("wirepod fetch failed")
 
-    async def tls_cert(ip: str, *, timeout: float = 10.0, port: int = 443) -> bytes:
-        del ip, timeout, port
-        return b"tls-cert"
-
-    async def fake_guid(**kwargs: Any) -> str:
-        del kwargs
-        return "guid-from-rpc"
+    async def unexpected(*args, **kwargs):
+        pytest.fail("Certificate discovery and authentication require a trusted certificate")
 
     monkeypatch.setattr(
-        "pyddlvector.provisioning.fetch_cert_for_wirepod_serial",
-        failing_wirepod_fetch,
+        "pyddlvector.provisioning.fetch_cert_for_wirepod_serial", failing_wirepod_fetch
     )
-    monkeypatch.setattr("pyddlvector.provisioning.fetch_cert_from_robot_tls", tls_cert)
-    monkeypatch.setattr("pyddlvector.provisioning.authenticate_robot_guid", fake_guid)
+    monkeypatch.setattr("pyddlvector.provisioning.fetch_cert_from_robot_tls", unexpected)
+    monkeypatch.setattr("pyddlvector.provisioning.authenticate_robot_guid", unexpected)
 
-    config = await provision_runtime_robot(
-        mode="wirepod",
-        name="Vector-T3X9",
-        ip="192.168.1.201",
-        serial="00908e7e",
-        wirepod_url="http://escapepod.local:8080",
-        stub_factory=lambda ch: object(),
-        request_factory=lambda session_id, client_name: {
-            "user_session_id": session_id,
-            "client_name": client_name,
-        },
-    )
-
-    assert config.cert_pem == b"tls-cert"
+    with pytest.raises(VectorProvisioningError, match="wirepod fetch failed"):
+        await provision_runtime_robot(
+            mode="wirepod",
+            name="Vector-T3X9",
+            ip="192.168.1.201",
+            serial="00908e7e",
+            wirepod_url="http://escapepod.local:8080",
+            stub_factory=lambda ch: object(),
+            request_factory=lambda session_id, client_name: None,
+        )
 
 
 def test_derive_name_from_cert_prefers_san(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,17 +287,12 @@ def test_derive_name_from_cert_falls_back_to_cn(monkeypatch: pytest.MonkeyPatch)
 async def test_provision_runtime_robot_derives_name_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def tls_cert(ip: str, *, timeout: float = 10.0, port: int = 443) -> bytes:
-        del ip, timeout, port
-        return b"tls-cert"
-
     captured_kwargs: dict[str, Any] = {}
 
     async def fake_guid(**kwargs: Any) -> str:
         captured_kwargs.update(kwargs)
         return "guid-from-rpc"
 
-    monkeypatch.setattr("pyddlvector.provisioning.fetch_cert_from_robot_tls", tls_cert)
     monkeypatch.setattr("pyddlvector.provisioning.authenticate_robot_guid", fake_guid)
     monkeypatch.setattr(
         "pyddlvector.provisioning.derive_name_from_cert",
@@ -324,7 +304,7 @@ async def test_provision_runtime_robot_derives_name_when_missing(
         name=None,
         ip="192.168.1.201",
         serial=None,
-        wirepod_url=None,
+        cert_pem=b"trusted-certificate",
         session_id="Anything1",
         stub_factory=lambda ch: object(),
         request_factory=lambda session_id, client_name: {
@@ -336,3 +316,29 @@ async def test_provision_runtime_robot_derives_name_when_missing(
     assert captured_kwargs["name"] == "Vector-Autodiscovered"
     assert config.name == "Vector-Autodiscovered"
     assert config.guid == "guid-from-rpc"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_robot_guid_rejects_unauthorized_response_with_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnauthorizedStub:
+        async def UserAuthentication(self, request, *, timeout):
+            return protocol.UserAuthenticationResponse(
+                code=protocol.UserAuthenticationResponse.UNAUTHORIZED,
+                client_token_guid=b"ignored",
+            )
+
+    channel = _FakeChannel()
+    _patch_grpc(monkeypatch, channel)
+    with pytest.raises(VectorAuthenticationError, match="denied"):
+        await authenticate_robot_guid(
+            ip="192.168.1.201",
+            name="Vector-T3X9",
+            cert_pem=b"cert",
+            user_session_id="session",
+            stub_factory=lambda ch: UnauthorizedStub(),
+            request_factory=lambda session, name: None,
+        )
+
+    assert channel.closed

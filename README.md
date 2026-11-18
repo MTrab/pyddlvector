@@ -112,7 +112,9 @@ When charger pose is available in the same `origin_id` as the nav map:
 ```python
 import asyncio
 
-from pyddlvector import RobotConfig, VectorClient, messaging
+from contextlib import aclosing
+
+from pyddlvector import RobotConfig, VectorClient
 
 
 async def main() -> None:
@@ -124,22 +126,62 @@ async def main() -> None:
         cert_file="/path/to/Vector-T3X9-00908e7e.cert",
     )
 
-    client = VectorClient(
-        robot,
-        stub_factory=lambda channel: messaging.client.ExternalInterfaceStub(channel),
-        default_timeout=10.0,
-    )
+    client = VectorClient(robot, default_timeout=10.0)
 
     await client.connect(timeout=10.0)
     try:
-        # request = messaging.protocol.BatteryStateRequest()
-        # response = await client.rpc("BatteryState", request, timeout=10.0)
-        pass
+        battery = await client.api.get_battery_state()
+        firmware = await client.api.get_firmware_version()
+        print(battery.battery_volts, firmware.os_version)
+
+        async with aclosing(client.iter_events()) as events:
+            event = await anext(events)
+            print(event.WhichOneof("event_type"))
     finally:
         await client.disconnect()
 
 
 asyncio.run(main())
+```
+
+### Named RPC helpers
+
+`client.api` provides one helper per RPC in the bundled service. Helper names,
+their source RPCs, and request and response types are listed in the
+[RPC catalogue](docs/ROBOT_CAPABILITY_MAP.md#4-komplet-rpc-funktionskatalog-86-stk).
+Request fields are keyword arguments. Nested messages accept dictionaries, and
+enums accept their protobuf name or number. Omitted fields follow protobuf
+defaults. Responses retain the corresponding protobuf types, including any
+operation-specific result, status, or action state.
+
+```python
+await client.api.update_settings(settings={"master_volume": "MUTE"})
+photos = await client.api.list_photos()
+
+async with aclosing(client.api.iter_camera_feed(read_timeout=5)) as frames:
+    response = await anext(frames)
+    print(response.image_id)
+```
+
+Server-streaming helpers return async iterators. Use `aclosing` when stopping
+early. `read_timeout` applies to each read. For parsed NavMap frames with
+reconnection, use `iter_nav_map_frames`.
+
+`open_behavior_control()` and `open_audio_playback()` open bidirectional
+streams with `async with`. Use `send(**fields)` to write requests, `read()` or
+`async for` for responses, and `finish_sending()` to close the request side
+while continuing to receive responses. Commands that require behavior control
+must run while control is granted. Each read and write has its own timeout.
+
+```python
+async with client.api.open_behavior_control() as control:
+    await control.send(control_request={"priority": "DEFAULT"})
+    async for response in control:
+        if response.HasField("control_granted_response"):
+            # Run a command that requires control here.
+            await control.send(control_release={})
+            await control.finish_sending()
+            break
 ```
 
 ## Quickstart: Runtime Provisioning
@@ -170,11 +212,19 @@ async def main() -> None:
         request_factory=auth_request_factory,
         timeout=10.0,
     )
-    print(robot)
+    return robot
 
 
 asyncio.run(main())
 ```
+
+Wire-pod provisioning takes a trusted `cert_pem` or downloads the certificate
+from the configured Wire-pod server using `serial` and `wirepod_url`. Use a
+server and network you trust. If you already have the robot's GUID and
+certificate, load them with `SdkConfigStore` or provide them to `RobotConfig`.
+
+See [protocol sources and hardware checks](docs/PROTOCOL.md) for provisioning
+endpoints, protobuf provenance, and a smoke test for a physical robot.
 
 ## Error Model
 

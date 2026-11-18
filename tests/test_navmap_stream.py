@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
+import grpc
 import pytest
 
+from pyddlvector.exceptions import VectorConnectionError
 from pyddlvector.navmap import iter_nav_map_frames
 
 
@@ -79,7 +81,7 @@ async def test_iter_nav_map_frames_yields_frame() -> None:
 async def test_iter_nav_map_frames_reconnects_after_stream_close() -> None:
     client = FakeClient(
         [
-            FakeNavMapStream([_response(10), None]),
+            FakeNavMapStream([_response(10), grpc.aio.EOF]),
             FakeNavMapStream([_response(11), None]),
         ],
     )
@@ -109,3 +111,14 @@ async def test_iter_nav_map_frames_reconnects_after_idle_timeout() -> None:
 
     assert frame.origin_id == 22
     assert client.stub.calls >= 2
+
+
+@pytest.mark.asyncio
+async def test_iter_nav_map_frames_stops_after_reconnect_limit() -> None:
+    client = FakeClient([FakeNavMapStream([grpc.aio.EOF])])
+    frames = iter_nav_map_frames(client, reconnect_delay=0.0, max_reconnect_attempts=2)
+
+    with pytest.raises(VectorConnectionError, match="closed NavMapFeed"):
+        await anext(frames)
+
+    assert client.stub.calls == 3
