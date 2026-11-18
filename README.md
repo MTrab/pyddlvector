@@ -218,10 +218,11 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Wire-pod provisioning takes a trusted `cert_pem` or downloads the certificate
-from the configured Wire-pod server using `serial` and `wirepod_url`. Use a
-server and network you trust. If you already have the robot's GUID and
-certificate, load them with `SdkConfigStore` or provide them to `RobotConfig`.
+Wire-pod provisioning tries the configured server when `wirepod_url` and
+`serial` are available. It falls back to fetching the certificate directly
+from the robot when the server is unavailable or the inputs are omitted. If you
+already have the robot's GUID and certificate, load them with `SdkConfigStore`
+or provide them to `RobotConfig`.
 
 See [protocol sources and hardware checks](docs/PROTOCOL.md) for provisioning
 endpoints, protobuf provenance, and a smoke test for a physical robot.

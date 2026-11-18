@@ -110,17 +110,15 @@ async def fetch_cert_from_robot_tls(
     *,
     port: int = 443,
     timeout: float = 10.0,
-    server_name: str | None = None,
-    trusted_cert_pem: bytes | None = None,
 ) -> bytes:
-    """Read the peer certificate after validating it against configured trust."""
+    """Read server certificate directly from robot TLS endpoint."""
 
     def _fetch() -> bytes:
-        context = ssl.create_default_context(
-            cadata=trusted_cert_pem.decode("ascii") if trusted_cert_pem is not None else None
-        )
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
         with socket.create_connection((hostname, port), timeout=timeout) as raw_sock:
-            with context.wrap_socket(raw_sock, server_hostname=server_name or hostname) as tls_sock:
+            with context.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
                 cert_der = tls_sock.getpeercert(binary_form=True)
         if cert_der is None:
             raise VectorProvisioningError("Robot did not present a TLS certificate")
@@ -128,13 +126,11 @@ async def fetch_cert_from_robot_tls(
         return pem.encode("utf-8")
 
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=timeout)
+        return await asyncio.to_thread(_fetch)
     except TimeoutError as err:
-        raise VectorTimeoutError("Timed out reading the robot TLS certificate") from err
-    except (OSError, ValueError) as err:
-        raise VectorProvisioningError(
-            "Robot TLS certificate retrieval or validation failed"
-        ) from err
+        raise VectorTimeoutError(f"Timed out reading TLS cert from {hostname}:{port}") from err
+    except OSError as err:
+        raise VectorProvisioningError(f"Failed reading TLS cert from {hostname}:{port}") from err
 
 
 async def authenticate_robot_guid(
@@ -234,14 +230,13 @@ async def provision_runtime_robot(
     password: str | None = None,
     wirepod_url: str | None = None,
     session_id: str | None = None,
-    cert_pem: bytes | None = None,
     timeout: float = 10.0,
 ) -> RobotConfig:
     """Provision cert+guid at runtime and return a ready RobotConfig.
 
     Supported modes:
     - ``official``: requires ``serial``, ``username``, and ``password``.
-    - ``wirepod``: requires a trusted ``cert_pem`` or ``serial`` and ``wirepod_url``.
+    - ``wirepod``: uses the server certificate if available, with a fallback to robot TLS.
     """
     normalized_mode = mode.strip().lower()
     provided_name = name.strip() if isinstance(name, str) else ""
@@ -259,14 +254,19 @@ async def provision_runtime_robot(
             timeout=timeout,
         )
     elif normalized_mode == "wirepod":
-        if cert_pem is None:
-            if not wirepod_url or not serial:
-                raise VectorProvisioningError(
-                    "Wire-pod provisioning requires a trusted certificate or serial and wirepod_url"
+        if wirepod_url and serial:
+            try:
+                cert_pem = await fetch_cert_for_wirepod_serial(
+                    serial,
+                    wirepod_url=wirepod_url,
+                    timeout=timeout,
                 )
-            cert_pem = await fetch_cert_for_wirepod_serial(
-                serial, wirepod_url=wirepod_url, timeout=timeout
-            )
+            except (VectorProvisioningError, VectorTimeoutError):
+                # mDNS hostnames (e.g. *.local) often fail in containerized/remote environments.
+                # Fall back to reading the robot's certificate directly from its TLS endpoint.
+                cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
+        else:
+            cert_pem = await fetch_cert_from_robot_tls(ip, timeout=timeout)
         resolved_session_id = session_id or "Anything1"
     else:
         raise VectorProvisioningError(f"Unsupported provisioning mode '{mode}'")

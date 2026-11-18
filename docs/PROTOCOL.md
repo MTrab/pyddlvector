@@ -34,12 +34,12 @@ poetry run python scripts/generate-rpc-helpers.py --check
 | Wire-pod | `GET {wirepod_url}/session-certs/{serial}` for the robot certificate, as used by the Wire-pod SDK |
 | Both | `UserAuthentication` on the robot's TLS gRPC endpoint, port 443 by default, to exchange the session ID for a GUID |
 
-The client uses the trusted robot certificate and checks the configured robot
-name. Subsequent RPCs send the GUID as a bearer token. A failed certificate
-download stops provisioning. Supply a previously trusted certificate via
-`cert_pem` when the Wire-pod certificate endpoint is unavailable.
-`fetch_cert_from_robot_tls` validates the peer against system trust or the
-provided `trusted_cert_pem`, using `server_name` when connecting by IP.
+Wire-pod provisioning falls back to requesting the robot's certificate
+directly from its TLS endpoint if the Wire-pod certificate cannot be downloaded
+or the server URL or serial is omitted. This initial fetch reads the peer
+certificate without verifying its issuer or hostname. The subsequent gRPC
+channel uses the retrieved certificate and checks the configured robot name. Once authenticated, the client
+sends the GUID as a bearer token.
 
 ## Physical robot smoke test
 
