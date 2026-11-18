@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
+import grpc
 import pytest
 
-from pyddlvector.exceptions import VectorProtocolError
+from pyddlvector.exceptions import VectorProtocolError, VectorRPCError
+from pyddlvector.messaging import protocol
 from pyddlvector.settings import (
     fetch_eye_color,
     fetch_master_volume,
@@ -251,11 +253,7 @@ def test_update_custom_eye_color_uses_update_settings_custom_eye_color() -> None
             serialized = request_serializer(request)
             # UpdateSettingsRequest{settings{custom_eye_color{hue:0.2 saturation:0.8 enabled:true}}}
             assert serialized == (
-                b"\x0a\x0e"
-                b"\x1a\x0c"
-                b"\x0d\xcd\xcc\x4c\x3e"
-                b"\x15\xcd\xcc\x4c\x3f"
-                b"\x18\x01"
+                b"\x0a\x0e\x1a\x0c\x0d\xcd\xcc\x4c\x3e\x15\xcd\xcc\x4c\x3f\x18\x01"
             )
             self.unary_calls.append(path)
 
@@ -287,10 +285,14 @@ def test_update_custom_eye_color_falls_back_to_set_eye_color_when_update_setting
         async def unary_unary(self, path: str, request, **kwargs):  # type: ignore[no-untyped-def]
             del request, kwargs
             assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
-            raise VectorProtocolError("Custom eye color not supported via UpdateSettings")
+            raise VectorRPCError(
+                "UpdateSettings unavailable", status_code=grpc.StatusCode.UNIMPLEMENTED
+            )
 
         async def rpc(self, method_name: str, request, **kwargs):  # type: ignore[no-untyped-def]
             del kwargs
+            if method_name == "UpdateSettings":
+                raise VectorProtocolError("Older stub has no UpdateSettings")
             self.rpc_calls.append(method_name)
             assert method_name == "SetEyeColor"
             assert request.hue == pytest.approx(0.2)
@@ -322,7 +324,9 @@ def test_update_custom_eye_color_falls_back_to_set_eye_color_path() -> None:
             del request, kwargs
             self.unary_calls.append(path)
             if path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings":
-                raise VectorProtocolError("Custom eye color not supported via UpdateSettings")
+                raise VectorRPCError(
+                    "UpdateSettings unavailable", status_code=grpc.StatusCode.UNIMPLEMENTED
+                )
 
             assert path == "/Anki.Vector.external_interface.ExternalInterface/SetEyeColor"
 
@@ -397,6 +401,7 @@ def test_update_master_volume_mute_uses_update_settings_directly() -> None:
             self.calls.append(method_name)
             assert method_name == "UpdateSettings"
             assert request.settings.master_volume == 0
+            assert request.SerializeToString() == b"\x0a\x02\x38\x00"
 
             class FakeResponse:
                 code = 0
@@ -423,6 +428,7 @@ def test_update_master_volume_mute_falls_back_to_update_settings_path() -> None:
             self.unary_calls.append(path)
             assert path == "/Anki.Vector.external_interface.ExternalInterface/UpdateSettings"
             assert request.settings.master_volume == 0
+            assert request.SerializeToString() == b"\x0a\x02\x38\x00"
 
             class FakeResponse:
                 code = 0
@@ -461,3 +467,16 @@ def test_update_master_volume_mute_retries_when_update_in_progress() -> None:
     selected = asyncio.run(update_master_volume(client, "mute", timeout=5))
     assert selected == "mute"
     assert client.calls == ["UpdateSettings", "UpdateSettings"]
+
+
+@pytest.mark.asyncio
+async def test_settings_rejection_is_not_reported_as_success() -> None:
+    class Robot:
+        async def rpc(self, method_name, request, *, timeout):
+            assert method_name == "UpdateSettings"
+            return protocol.UpdateSettingsResponse(
+                status=protocol.ResponseStatus(code=protocol.ResponseStatus.NOT_FOUND)
+            )
+
+    with pytest.raises(VectorProtocolError, match="NOT_FOUND"):
+        await update_custom_eye_color(Robot(), hue=0.0, saturation=0.0)

@@ -15,7 +15,7 @@ Denne fil kortlaegger robotmulighederne i `pyddlvector` og underliggende Vector 
 |---|---|---|---|---|
 | `RobotConfig` | dataclass | RW | Yes | Runtime/sdk config for forbindelse |
 | `SdkConfigStore` | class | RO | Yes | Laeser `sdk_config.ini` |
-| `VectorClient` | class | RW | Yes | Async gRPC klient (`connect`, `rpc`, `run`, `unary_unary`) |
+| `VectorClient` | class | RW | Yes | Async gRPC-klient med unary RPC, streams og BehaviorControl |
 | `VectorFleet` | class | RW | Yes | Multi-robot client lifecycle |
 | `RobotActivityTracker` | class | RO | Yes | Afleder user-facing activity fra events + `RobotState` |
 | `describe_robot_activity` | function | RO | Yes | Direkte state->activity mapping |
@@ -148,96 +148,96 @@ Alle nedenstaaende er RO event payloads:
 
 ## 4) Komplet RPC-funktionskatalog (86 stk)
 
-Alle kan kaldes via `VectorClient.rpc()`/`run()`.
+Alle metoder i tabellen findes på `client.api`.
 
-| RPC | Request -> Response | Mode | Implemented in module | Noter |
-|---|---|---|---|---|
-| `ProtocolVersion` | `ProtocolVersionRequest` -> `ProtocolVersionResponse` | RO | Yes (VectorClient.connect handshake) |  |
-| `SDKInitialization` | `SDKInitializationRequest` -> `SDKInitializationResponse` | RW | Yes (VectorClient.connect handshake) |  |
-| `DriveWheels` | `DriveWheelsRequest` -> `DriveWheelsResponse` | RW | No (generic via VectorClient) |  |
-| `PlayAnimationTrigger` | `PlayAnimationTriggerRequest` -> `PlayAnimationResponse` | RW | No (generic via VectorClient) |  |
-| `PlayAnimation` | `PlayAnimationRequest` -> `PlayAnimationResponse` | RW | No (generic via VectorClient) |  |
-| `ListAnimations` | `ListAnimationsRequest` -> `ListAnimationsResponse` | RO | No (generic via VectorClient) |  |
-| `ListAnimationTriggers` | `ListAnimationTriggersRequest` -> `ListAnimationTriggersResponse` | RO | No (generic via VectorClient) |  |
-| `MoveHead` | `MoveHeadRequest` -> `MoveHeadResponse` | RW | No (generic via VectorClient) |  |
-| `MoveLift` | `MoveLiftRequest` -> `MoveLiftResponse` | RW | No (generic via VectorClient) |  |
-| `StopAllMotors` | `StopAllMotorsRequest` -> `StopAllMotorsResponse` | RW | No (generic via VectorClient) |  |
-| `DisplayFaceImageRGB` | `DisplayFaceImageRGBRequest` -> `DisplayFaceImageRGBResponse` | RW | No (generic via VectorClient) |  |
-| `EventStream` | `EventRequest` -> `stream EventResponse` | Stream (RO) | Partial (activity/telemetry/stimulation helpers) |  |
-| `ExternalAudioStreamPlayback` | `stream ExternalAudioStreamRequest` -> `stream ExternalAudioStreamResponse` | Stream (RW) | No (generic via VectorClient) |  |
-| `BehaviorControl` | `stream BehaviorControlRequest` -> `stream BehaviorControlResponse` | Stream (RW) | No (generic via VectorClient) |  |
-| `AssumeBehaviorControl` | `BehaviorControlRequest` -> `stream BehaviorControlResponse` | Stream (RW) | No (generic via VectorClient) |  |
-| `CancelFaceEnrollment` | `CancelFaceEnrollmentRequest` -> `CancelFaceEnrollmentResponse` | RW | No (generic via VectorClient) |  |
-| `RequestEnrolledNames` | `RequestEnrolledNamesRequest` -> `RequestEnrolledNamesResponse` | RW | No (generic via VectorClient) |  |
-| `UpdateEnrolledFaceByID` | `UpdateEnrolledFaceByIDRequest` -> `UpdateEnrolledFaceByIDResponse` | RW | No (generic via VectorClient) |  |
-| `EraseEnrolledFaceByID` | `EraseEnrolledFaceByIDRequest` -> `EraseEnrolledFaceByIDResponse` | RW | No (generic via VectorClient) |  |
-| `EraseAllEnrolledFaces` | `EraseAllEnrolledFacesRequest` -> `EraseAllEnrolledFacesResponse` | RW | No (generic via VectorClient) |  |
-| `SetFaceToEnroll` | `SetFaceToEnrollRequest` -> `SetFaceToEnrollResponse` | RW | No (generic via VectorClient) |  |
-| `EnrollFace` | `EnrollFaceRequest` -> `EnrollFaceResponse` | RW | No (generic via VectorClient) |  |
-| `EnableMarkerDetection` | `EnableMarkerDetectionRequest` -> `EnableMarkerDetectionResponse` | RW | No (generic via VectorClient) |  |
-| `EnableFaceDetection` | `EnableFaceDetectionRequest` -> `EnableFaceDetectionResponse` | RW | No (generic via VectorClient) |  |
-| `EnableMotionDetection` | `EnableMotionDetectionRequest` -> `EnableMotionDetectionResponse` | RW | No (generic via VectorClient) |  |
-| `EnableMirrorMode` | `EnableMirrorModeRequest` -> `EnableMirrorModeResponse` | RW | No (generic via VectorClient) |  |
-| `EnableImageStreaming` | `EnableImageStreamingRequest` -> `EnableImageStreamingResponse` | RW | No (generic via VectorClient) |  |
-| `IsImageStreamingEnabled` | `IsImageStreamingEnabledRequest` -> `IsImageStreamingEnabledResponse` | RO | No (generic via VectorClient) |  |
-| `CancelActionByIdTag` | `CancelActionByIdTagRequest` -> `CancelActionByIdTagResponse` | RW | No (generic via VectorClient) |  |
-| `CancelBehavior` | `CancelBehaviorRequest` -> `CancelBehaviorResponse` | RW | No (generic via VectorClient) |  |
-| `GoToPose` | `GoToPoseRequest` -> `GoToPoseResponse` | RW | No (generic via VectorClient) |  |
-| `DockWithCube` | `DockWithCubeRequest` -> `DockWithCubeResponse` | RW | No (generic via VectorClient) |  |
-| `DriveOffCharger` | `DriveOffChargerRequest` -> `DriveOffChargerResponse` | RW | No (generic via VectorClient) |  |
-| `DriveOnCharger` | `DriveOnChargerRequest` -> `DriveOnChargerResponse` | RW | No (generic via VectorClient) |  |
-| `FindFaces` | `FindFacesRequest` -> `FindFacesResponse` | RW | No (generic via VectorClient) |  |
-| `LookAroundInPlace` | `LookAroundInPlaceRequest` -> `LookAroundInPlaceResponse` | RW | No (generic via VectorClient) |  |
-| `RollBlock` | `RollBlockRequest` -> `RollBlockResponse` | RW | No (generic via VectorClient) |  |
-| `PhotosInfo` | `PhotosInfoRequest` -> `PhotosInfoResponse` | RO | No (generic via VectorClient) |  |
-| `Photo` | `PhotoRequest` -> `PhotoResponse` | RO | No (generic via VectorClient) |  |
-| `Thumbnail` | `ThumbnailRequest` -> `ThumbnailResponse` | RO | No (generic via VectorClient) |  |
-| `DeletePhoto` | `DeletePhotoRequest` -> `DeletePhotoResponse` | RW | No (generic via VectorClient) |  |
-| `DriveStraight` | `DriveStraightRequest` -> `DriveStraightResponse` | RW | No (generic via VectorClient) |  |
-| `TurnInPlace` | `TurnInPlaceRequest` -> `TurnInPlaceResponse` | RW | No (generic via VectorClient) |  |
-| `SetHeadAngle` | `SetHeadAngleRequest` -> `SetHeadAngleResponse` | RW | No (generic via VectorClient) |  |
-| `SetLiftHeight` | `SetLiftHeightRequest` -> `SetLiftHeightResponse` | RW | No (generic via VectorClient) |  |
-| `TurnTowardsFace` | `TurnTowardsFaceRequest` -> `TurnTowardsFaceResponse` | RW | No (generic via VectorClient) |  |
-| `GoToObject` | `GoToObjectRequest` -> `GoToObjectResponse` | RW | No (generic via VectorClient) |  |
-| `RollObject` | `RollObjectRequest` -> `RollObjectResponse` | RW | No (generic via VectorClient) |  |
-| `PopAWheelie` | `PopAWheelieRequest` -> `PopAWheelieResponse` | RW | No (generic via VectorClient) |  |
-| `PickupObject` | `PickupObjectRequest` -> `PickupObjectResponse` | RW | No (generic via VectorClient) |  |
-| `PlaceObjectOnGroundHere` | `PlaceObjectOnGroundHereRequest` -> `PlaceObjectOnGroundHereResponse` | RW | No (generic via VectorClient) |  |
-| `SetMasterVolume` | `MasterVolumeRequest` -> `MasterVolumeResponse` | RW | Yes (update_master_volume) |  |
-| `UserAuthentication` | `UserAuthenticationRequest` -> `UserAuthenticationResponse` | RW | Yes (authenticate_robot_guid) |  |
-| `BatteryState` | `BatteryStateRequest` -> `BatteryStateResponse` | RO | No (generic via VectorClient) |  |
-| `VersionState` | `VersionStateRequest` -> `VersionStateResponse` | RO | No (generic via VectorClient) |  |
-| `SayText` | `SayTextRequest` -> `SayTextResponse` | RW | No (generic via VectorClient) |  |
-| `ConnectCube` | `ConnectCubeRequest` -> `ConnectCubeResponse` | RW | No (generic via VectorClient) |  |
-| `DisconnectCube` | `DisconnectCubeRequest` -> `DisconnectCubeResponse` | RW | No (generic via VectorClient) |  |
-| `CubesAvailable` | `CubesAvailableRequest` -> `CubesAvailableResponse` | RO | No (generic via VectorClient) |  |
-| `FlashCubeLights` | `FlashCubeLightsRequest` -> `FlashCubeLightsResponse` | RW | No (generic via VectorClient) |  |
-| `ForgetPreferredCube` | `ForgetPreferredCubeRequest` -> `ForgetPreferredCubeResponse` | RW | No (generic via VectorClient) |  |
-| `SetPreferredCube` | `SetPreferredCubeRequest` -> `SetPreferredCubeResponse` | RW | No (generic via VectorClient) |  |
-| `DeleteCustomObjects` | `DeleteCustomObjectsRequest` -> `DeleteCustomObjectsResponse` | RW | No (generic via VectorClient) |  |
-| `CreateFixedCustomObject` | `CreateFixedCustomObjectRequest` -> `CreateFixedCustomObjectResponse` | RW | No (generic via VectorClient) |  |
-| `DefineCustomObject` | `DefineCustomObjectRequest` -> `DefineCustomObjectResponse` | RW | No (generic via VectorClient) |  |
-| `SetCubeLights` | `SetCubeLightsRequest` -> `SetCubeLightsResponse` | RW | No (generic via VectorClient) |  |
-| `AudioFeed` | `AudioFeedRequest` -> `stream AudioFeedResponse` | Stream (RO) | No (generic via VectorClient) |  |
-| `CameraFeed` | `CameraFeedRequest` -> `stream CameraFeedResponse` | Stream (RO) | Partial (extract_camera_frame helper) |  |
-| `CaptureSingleImage` | `CaptureSingleImageRequest` -> `CaptureSingleImageResponse` | RO | No (generic via VectorClient) |  |
-| `GetCameraConfig` | `CameraConfigRequest` -> `CameraConfigResponse` | RO | No (generic via VectorClient) |  |
-| `SetEyeColor` | `SetEyeColorRequest` -> `SetEyeColorResponse` | RW | No (generic via VectorClient) |  |
-| `NavMapFeed` | `NavMapFeedRequest` -> `stream NavMapFeedResponse` | Stream (RO) | Partial (`extract_nav_map_frame`, `iter_nav_map_frames`) |  |
-| `SetCameraSettings` | `SetCameraSettingsRequest` -> `SetCameraSettingsResponse` | RW | No (generic via VectorClient) |  |
-| `AppIntent` | `AppIntentRequest` -> `AppIntentResponse` | RW | No (generic via VectorClient) |  |
-| `UpdateSettings` | `UpdateSettingsRequest` -> `UpdateSettingsResponse` | RW | Yes (update_master_volume fallback) |  |
-| `GetLatestAttentionTransfer` | `LatestAttentionTransferRequest` -> `LatestAttentionTransferResponse` | RO | No (generic via VectorClient) |  |
-| `PullJdocs` | `PullJdocsRequest` -> `PullJdocsResponse` | RO | Yes (fetch_master_volume, fetch_lifetime_statistics) |  |
-| `UpdateAccountSettings` | `UpdateAccountSettingsRequest` -> `UpdateAccountSettingsResponse` | RW | No (generic via VectorClient) |  |
-| `StartUpdateEngine` | `CheckUpdateStatusRequest` -> `CheckUpdateStatusResponse` | RW | No (generic via VectorClient) |  |
-| `CheckUpdateStatus` | `CheckUpdateStatusRequest` -> `CheckUpdateStatusResponse` | RO | No (generic via VectorClient) |  |
-| `UpdateAndRestart` | `UpdateAndRestartRequest` -> `UpdateAndRestartResponse` | RW | No (generic via VectorClient) |  |
-| `CheckCloudConnection` | `CheckCloudRequest` -> `CheckCloudResponse` | RO | No (generic via VectorClient) |  |
-| `GetFeatureFlag` | `FeatureFlagRequest` -> `FeatureFlagResponse` | RO | No (generic via VectorClient) |  |
-| `GetFeatureFlagList` | `FeatureFlagListRequest` -> `FeatureFlagListResponse` | RO | No (generic via VectorClient) |  |
-| `GetAlexaAuthState` | `AlexaAuthStateRequest` -> `AlexaAuthStateResponse` | RO | No (generic via VectorClient) |  |
-| `AlexaOptIn` | `AlexaOptInRequest` -> `AlexaOptInResponse` | RW | No (generic via VectorClient) |  |
+| RPC | Request -> Response | Mode | Python-metode |
+|---|---|---|---|
+| `ProtocolVersion` | `ProtocolVersionRequest` -> `ProtocolVersionResponse` | RO | `negotiate_protocol_version` |
+| `SDKInitialization` | `SDKInitializationRequest` -> `SDKInitializationResponse` | RW | `initialize_sdk` |
+| `DriveWheels` | `DriveWheelsRequest` -> `DriveWheelsResponse` | RW | `drive_wheels` |
+| `PlayAnimationTrigger` | `PlayAnimationTriggerRequest` -> `PlayAnimationResponse` | RW | `play_animation_trigger` |
+| `PlayAnimation` | `PlayAnimationRequest` -> `PlayAnimationResponse` | RW | `play_animation` |
+| `ListAnimations` | `ListAnimationsRequest` -> `ListAnimationsResponse` | RO | `list_animations` |
+| `ListAnimationTriggers` | `ListAnimationTriggersRequest` -> `ListAnimationTriggersResponse` | RO | `list_animation_triggers` |
+| `MoveHead` | `MoveHeadRequest` -> `MoveHeadResponse` | RW | `move_head` |
+| `MoveLift` | `MoveLiftRequest` -> `MoveLiftResponse` | RW | `move_lift` |
+| `StopAllMotors` | `StopAllMotorsRequest` -> `StopAllMotorsResponse` | RW | `stop_all_motors` |
+| `DisplayFaceImageRGB` | `DisplayFaceImageRGBRequest` -> `DisplayFaceImageRGBResponse` | RW | `display_rgb_face_image` |
+| `EventStream` | `EventRequest` -> `stream EventResponse` | Stream (RO) | `iter_event_responses` |
+| `ExternalAudioStreamPlayback` | `stream ExternalAudioStreamRequest` -> `stream ExternalAudioStreamResponse` | Stream (RW) | `open_audio_playback` |
+| `BehaviorControl` | `stream BehaviorControlRequest` -> `stream BehaviorControlResponse` | Stream (RW) | `open_behavior_control` |
+| `AssumeBehaviorControl` | `BehaviorControlRequest` -> `stream BehaviorControlResponse` | Stream (RW) | `assume_behavior_control` |
+| `CancelFaceEnrollment` | `CancelFaceEnrollmentRequest` -> `CancelFaceEnrollmentResponse` | RW | `cancel_face_enrollment` |
+| `RequestEnrolledNames` | `RequestEnrolledNamesRequest` -> `RequestEnrolledNamesResponse` | RW | `list_enrolled_faces` |
+| `UpdateEnrolledFaceByID` | `UpdateEnrolledFaceByIDRequest` -> `UpdateEnrolledFaceByIDResponse` | RW | `rename_enrolled_face` |
+| `EraseEnrolledFaceByID` | `EraseEnrolledFaceByIDRequest` -> `EraseEnrolledFaceByIDResponse` | RW | `erase_enrolled_face` |
+| `EraseAllEnrolledFaces` | `EraseAllEnrolledFacesRequest` -> `EraseAllEnrolledFacesResponse` | RW | `erase_all_enrolled_faces` |
+| `SetFaceToEnroll` | `SetFaceToEnrollRequest` -> `SetFaceToEnrollResponse` | RW | `set_face_to_enroll` |
+| `EnrollFace` | `EnrollFaceRequest` -> `EnrollFaceResponse` | RW | `enroll_face` |
+| `EnableMarkerDetection` | `EnableMarkerDetectionRequest` -> `EnableMarkerDetectionResponse` | RW | `enable_marker_detection` |
+| `EnableFaceDetection` | `EnableFaceDetectionRequest` -> `EnableFaceDetectionResponse` | RW | `enable_face_detection` |
+| `EnableMotionDetection` | `EnableMotionDetectionRequest` -> `EnableMotionDetectionResponse` | RW | `enable_motion_detection` |
+| `EnableMirrorMode` | `EnableMirrorModeRequest` -> `EnableMirrorModeResponse` | RW | `enable_mirror_mode` |
+| `EnableImageStreaming` | `EnableImageStreamingRequest` -> `EnableImageStreamingResponse` | RW | `enable_image_streaming` |
+| `IsImageStreamingEnabled` | `IsImageStreamingEnabledRequest` -> `IsImageStreamingEnabledResponse` | RO | `get_image_streaming_status` |
+| `CancelActionByIdTag` | `CancelActionByIdTagRequest` -> `CancelActionByIdTagResponse` | RW | `cancel_action_by_id` |
+| `CancelBehavior` | `CancelBehaviorRequest` -> `CancelBehaviorResponse` | RW | `cancel_behavior` |
+| `GoToPose` | `GoToPoseRequest` -> `GoToPoseResponse` | RW | `go_to_pose` |
+| `DockWithCube` | `DockWithCubeRequest` -> `DockWithCubeResponse` | RW | `dock_with_cube` |
+| `DriveOffCharger` | `DriveOffChargerRequest` -> `DriveOffChargerResponse` | RW | `drive_off_charger` |
+| `DriveOnCharger` | `DriveOnChargerRequest` -> `DriveOnChargerResponse` | RW | `drive_on_charger` |
+| `FindFaces` | `FindFacesRequest` -> `FindFacesResponse` | RW | `find_faces` |
+| `LookAroundInPlace` | `LookAroundInPlaceRequest` -> `LookAroundInPlaceResponse` | RW | `look_around_in_place` |
+| `RollBlock` | `RollBlockRequest` -> `RollBlockResponse` | RW | `roll_block` |
+| `PhotosInfo` | `PhotosInfoRequest` -> `PhotosInfoResponse` | RO | `list_photos` |
+| `Photo` | `PhotoRequest` -> `PhotoResponse` | RO | `get_photo` |
+| `Thumbnail` | `ThumbnailRequest` -> `ThumbnailResponse` | RO | `get_photo_thumbnail` |
+| `DeletePhoto` | `DeletePhotoRequest` -> `DeletePhotoResponse` | RW | `delete_photo` |
+| `DriveStraight` | `DriveStraightRequest` -> `DriveStraightResponse` | RW | `drive_straight` |
+| `TurnInPlace` | `TurnInPlaceRequest` -> `TurnInPlaceResponse` | RW | `turn_in_place` |
+| `SetHeadAngle` | `SetHeadAngleRequest` -> `SetHeadAngleResponse` | RW | `set_head_angle` |
+| `SetLiftHeight` | `SetLiftHeightRequest` -> `SetLiftHeightResponse` | RW | `set_lift_height` |
+| `TurnTowardsFace` | `TurnTowardsFaceRequest` -> `TurnTowardsFaceResponse` | RW | `turn_towards_face` |
+| `GoToObject` | `GoToObjectRequest` -> `GoToObjectResponse` | RW | `go_to_object` |
+| `RollObject` | `RollObjectRequest` -> `RollObjectResponse` | RW | `roll_object` |
+| `PopAWheelie` | `PopAWheelieRequest` -> `PopAWheelieResponse` | RW | `pop_a_wheelie` |
+| `PickupObject` | `PickupObjectRequest` -> `PickupObjectResponse` | RW | `pickup_object` |
+| `PlaceObjectOnGroundHere` | `PlaceObjectOnGroundHereRequest` -> `PlaceObjectOnGroundHereResponse` | RW | `place_object_on_ground_here` |
+| `SetMasterVolume` | `MasterVolumeRequest` -> `MasterVolumeResponse` | RW | `set_master_volume` |
+| `UserAuthentication` | `UserAuthenticationRequest` -> `UserAuthenticationResponse` | RW | `authenticate_user` |
+| `BatteryState` | `BatteryStateRequest` -> `BatteryStateResponse` | RO | `get_battery_state` |
+| `VersionState` | `VersionStateRequest` -> `VersionStateResponse` | RO | `get_firmware_version` |
+| `SayText` | `SayTextRequest` -> `SayTextResponse` | RW | `say_text` |
+| `ConnectCube` | `ConnectCubeRequest` -> `ConnectCubeResponse` | RW | `connect_cube` |
+| `DisconnectCube` | `DisconnectCubeRequest` -> `DisconnectCubeResponse` | RW | `disconnect_cube` |
+| `CubesAvailable` | `CubesAvailableRequest` -> `CubesAvailableResponse` | RO | `list_available_cubes` |
+| `FlashCubeLights` | `FlashCubeLightsRequest` -> `FlashCubeLightsResponse` | RW | `flash_cube_lights` |
+| `ForgetPreferredCube` | `ForgetPreferredCubeRequest` -> `ForgetPreferredCubeResponse` | RW | `forget_preferred_cube` |
+| `SetPreferredCube` | `SetPreferredCubeRequest` -> `SetPreferredCubeResponse` | RW | `set_preferred_cube` |
+| `DeleteCustomObjects` | `DeleteCustomObjectsRequest` -> `DeleteCustomObjectsResponse` | RW | `delete_custom_objects` |
+| `CreateFixedCustomObject` | `CreateFixedCustomObjectRequest` -> `CreateFixedCustomObjectResponse` | RW | `create_fixed_custom_object` |
+| `DefineCustomObject` | `DefineCustomObjectRequest` -> `DefineCustomObjectResponse` | RW | `define_custom_object` |
+| `SetCubeLights` | `SetCubeLightsRequest` -> `SetCubeLightsResponse` | RW | `set_cube_lights` |
+| `AudioFeed` | `AudioFeedRequest` -> `stream AudioFeedResponse` | Stream (RO) | `iter_audio_feed` |
+| `CameraFeed` | `CameraFeedRequest` -> `stream CameraFeedResponse` | Stream (RO) | `iter_camera_feed` |
+| `CaptureSingleImage` | `CaptureSingleImageRequest` -> `CaptureSingleImageResponse` | RO | `capture_single_image` |
+| `GetCameraConfig` | `CameraConfigRequest` -> `CameraConfigResponse` | RO | `get_camera_config` |
+| `SetEyeColor` | `SetEyeColorRequest` -> `SetEyeColorResponse` | RW | `set_eye_color` |
+| `NavMapFeed` | `NavMapFeedRequest` -> `stream NavMapFeedResponse` | Stream (RO) | `iter_nav_map_feed` |
+| `SetCameraSettings` | `SetCameraSettingsRequest` -> `SetCameraSettingsResponse` | RW | `set_camera_settings` |
+| `AppIntent` | `AppIntentRequest` -> `AppIntentResponse` | RW | `send_app_intent` |
+| `UpdateSettings` | `UpdateSettingsRequest` -> `UpdateSettingsResponse` | RW | `update_settings` |
+| `GetLatestAttentionTransfer` | `LatestAttentionTransferRequest` -> `LatestAttentionTransferResponse` | RO | `get_latest_attention_transfer` |
+| `PullJdocs` | `PullJdocsRequest` -> `PullJdocsResponse` | RO | `pull_jdocs` |
+| `UpdateAccountSettings` | `UpdateAccountSettingsRequest` -> `UpdateAccountSettingsResponse` | RW | `update_account_settings` |
+| `StartUpdateEngine` | `CheckUpdateStatusRequest` -> `CheckUpdateStatusResponse` | RW | `start_update_engine` |
+| `CheckUpdateStatus` | `CheckUpdateStatusRequest` -> `CheckUpdateStatusResponse` | RO | `check_update_status` |
+| `UpdateAndRestart` | `UpdateAndRestartRequest` -> `UpdateAndRestartResponse` | RW | `update_and_restart` |
+| `CheckCloudConnection` | `CheckCloudRequest` -> `CheckCloudResponse` | RO | `check_cloud_connection` |
+| `GetFeatureFlag` | `FeatureFlagRequest` -> `FeatureFlagResponse` | RO | `get_feature_flag` |
+| `GetFeatureFlagList` | `FeatureFlagListRequest` -> `FeatureFlagListResponse` | RO | `get_feature_flag_list` |
+| `GetAlexaAuthState` | `AlexaAuthStateRequest` -> `AlexaAuthStateResponse` | RO | `get_alexa_auth_state` |
+| `AlexaOptIn` | `AlexaOptInRequest` -> `AlexaOptInResponse` | RW | `set_alexa_opt_in` |
 
 ## 5) Hurtigt svar paa read-only vs write
 
@@ -257,7 +257,7 @@ Alle kan kaldes via `VectorClient.rpc()`/`run()`.
 
 ## 7) Kendte gaps
 
-- De fleste RPC'er er tilgaengelige via generisk klient, men mangler dedikerede high-level wrappers.
+- Understøttelsen af de enkelte RPC'er afhænger af robottens firmware.
 - Ikke alle event payloads er endnu normaliseret til egne dataclasses.
 
 ## Kilder

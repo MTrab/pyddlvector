@@ -4,21 +4,29 @@ from __future__ import annotations
 
 import asyncio
 import platform
-from collections.abc import Awaitable, Callable
-from typing import Any, Generic, TypeVar
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing, asynccontextmanager, suppress
+from importlib.metadata import PackageNotFoundError, version
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from uuid import uuid4
 
 import grpc
 
+from ._rpc import DuplexStream, RequestT, _map_rpc_error
 from .config import RobotConfig
 from .exceptions import (
     VectorAuthenticationError,
     VectorConnectionError,
     VectorProtocolError,
-    VectorRPCError,
     VectorTimeoutError,
 )
+from .messaging import protocol
+from .messaging.external_interface_pb2_grpc import ExternalInterfaceStub
 
-StubT = TypeVar("StubT")
+if TYPE_CHECKING:
+    from ._external_interface import ExternalInterface
+
+StubT = TypeVar("StubT", default=ExternalInterfaceStub)
 ResponseT = TypeVar("ResponseT")
 
 
@@ -29,16 +37,30 @@ class VectorClient(Generic[StubT]):
         self,
         robot: RobotConfig,
         *,
-        stub_factory: Callable[[grpc.aio.Channel], StubT],
+        stub_factory: Callable[[grpc.aio.Channel], StubT] | None = None,
         default_timeout: float = 10.0,
         channel_options: tuple[tuple[str, Any], ...] = (),
     ) -> None:
+        from ._external_interface import ExternalInterface
+
         self._robot = robot
-        self._stub_factory = stub_factory
+        self._stub_factory = (
+            stub_factory
+            if stub_factory is not None
+            else cast(Callable[[grpc.aio.Channel], StubT], ExternalInterfaceStub)
+        )
+        self._api = ExternalInterface(self)
         self._default_timeout = default_timeout
         self._channel_options = channel_options
+        self._lifecycle_lock = asyncio.Lock()
+        self._control_lock = asyncio.Lock()
         self._channel: grpc.aio.Channel | None = None
         self._stub: StubT | None = None
+
+    @property
+    def api(self) -> ExternalInterface:
+        """Named helpers for the bundled ExternalInterface RPCs."""
+        return self._api
 
     @property
     def robot(self) -> RobotConfig:
@@ -59,49 +81,69 @@ class VectorClient(Generic[StubT]):
 
     async def connect(self, *, timeout: float | None = None) -> None:
         """Open TLS/authenticated gRPC channel using cert + guid from config."""
-        if self.connected:
-            return
+        async with self._lifecycle_lock:
+            if self.connected:
+                return
 
-        trusted_certs = self._robot.trusted_certs()
+            trusted_certs = await asyncio.to_thread(self._robot.trusted_certs)
+            channel_credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
+            call_credentials = grpc.access_token_call_credentials(self._robot.guid)
+            credentials = grpc.composite_channel_credentials(channel_credentials, call_credentials)
 
-        channel_credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
-        call_credentials = grpc.access_token_call_credentials(self._robot.guid)
-        credentials = grpc.composite_channel_credentials(channel_credentials, call_credentials)
+            options = self._channel_options + (("grpc.ssl_target_name_override", self._robot.name),)
+            channel = grpc.aio.secure_channel(self._robot.host, credentials, options=options)
+            effective_timeout = timeout if timeout is not None else self._default_timeout
 
-        options = (("grpc.ssl_target_name_override", self._robot.name),) + self._channel_options
-        channel = grpc.aio.secure_channel(self._robot.host, credentials, options=options)
+            try:
+                try:
+                    await asyncio.wait_for(channel.channel_ready(), timeout=effective_timeout)
+                except TimeoutError as err:
+                    raise VectorTimeoutError(
+                        f"Timed out opening the robot gRPC channel after {effective_timeout:.2f}s"
+                    ) from err
 
-        effective_timeout = timeout if timeout is not None else self._default_timeout
-        try:
-            await asyncio.wait_for(channel.channel_ready(), timeout=effective_timeout)
-        except TimeoutError as err:
-            await channel.close()
-            raise VectorTimeoutError(
-                f"Timed out connecting to {self._robot.host} after {effective_timeout:.2f}s"
-            ) from err
-        except Exception:
-            await channel.close()
-            raise
+                stub = self._stub_factory(channel)
+                response = await self._handshake_rpc(
+                    stub,
+                    "ProtocolVersion",
+                    protocol.ProtocolVersionRequest(
+                        client_version=protocol.PROTOCOL_VERSION_CURRENT,
+                        min_host_version=protocol.PROTOCOL_VERSION_MINIMUM,
+                    ),
+                    effective_timeout,
+                )
+                if response is not None:
+                    if response.result != protocol.ProtocolVersionResponse.SUCCESS:
+                        raise VectorProtocolError("Robot rejected protocol version negotiation")
+                    if response.host_version < protocol.PROTOCOL_VERSION_MINIMUM:
+                        raise VectorProtocolError("Robot host protocol version is too old")
 
-        self._channel = channel
-        self._stub = self._stub_factory(channel)
-        try:
-            await self._maybe_protocol_handshake(timeout=effective_timeout)
-            await self._maybe_sdk_initialize(timeout=effective_timeout)
-        except Exception:
-            self._stub = None
-            self._channel = None
-            await channel.close()
-            raise
+                response = await self._handshake_rpc(
+                    stub,
+                    "SDKInitialization",
+                    await asyncio.to_thread(_build_sdk_initialization_request),
+                    effective_timeout,
+                )
+                _check_response_status(response, "SDKInitialization")
+                self._channel, self._stub = channel, stub
+            finally:
+                if self._channel is not channel:
+                    await channel.close()
 
     async def disconnect(self) -> None:
         """Close the active channel and clear stub references."""
-        channel = self._channel
-        self._stub = None
-        self._channel = None
+        async with self._lifecycle_lock:
+            channel = self._channel
+            self._channel = None
+            self._stub = None
+            if channel is not None:
+                await channel.close()
 
-        if channel is not None:
-            await channel.close()
+    def _get_rpc(self, method_name: str) -> Callable[..., Any]:
+        method = getattr(self.stub, method_name, None)
+        if not callable(method):
+            raise VectorProtocolError(f"Stub does not expose callable RPC '{method_name}'")
+        return method
 
     async def rpc(
         self,
@@ -111,15 +153,25 @@ class VectorClient(Generic[StubT]):
         timeout: float | None = None,
     ) -> Any:
         """Call a unary RPC by method name on the configured stub."""
-        if not self.connected:
-            raise VectorConnectionError("Client is not connected")
+        return await self._call_unary(
+            self._get_unary_rpc(method_name), method_name, request, timeout
+        )
 
-        method = getattr(self.stub, method_name, None)
-        if method is None:
-            raise VectorProtocolError(f"Stub does not expose RPC method '{method_name}'")
-        if not callable(method):
-            raise VectorProtocolError(f"Stub attribute '{method_name}' is not callable")
+    def _get_unary_rpc(self, method_name: str) -> Callable[..., Awaitable[Any]]:
+        method = self._get_rpc(method_name)
+        if isinstance(
+            method, grpc.aio.UnaryStreamMultiCallable | grpc.aio.StreamStreamMultiCallable
+        ):
+            raise VectorProtocolError(f"RPC '{method_name}' returns a stream")
+        return method
 
+    async def _call_unary(
+        self,
+        method: Callable[..., Awaitable[ResponseT]],
+        method_name: str,
+        request: Any,
+        timeout: float | None,
+    ) -> ResponseT:
         effective_timeout = timeout if timeout is not None else self._default_timeout
         try:
             return await method(request, timeout=effective_timeout)
@@ -141,13 +193,7 @@ class VectorClient(Generic[StubT]):
         if not self.connected:
             raise VectorConnectionError("Client is not connected")
 
-        effective_timeout = timeout if timeout is not None else self._default_timeout
-        try:
-            return await rpc(request, timeout=effective_timeout)
-        except TimeoutError as err:
-            raise VectorTimeoutError(f"RPC call timed out after {effective_timeout:.2f}s") from err
-        except grpc.RpcError as err:
-            raise _map_rpc_error(err, getattr(rpc, "__name__", "<rpc>")) from err
+        return await self._call_unary(rpc, getattr(rpc, "__name__", "<rpc>"), request, timeout)
 
     async def unary_unary(
         self,
@@ -162,125 +208,192 @@ class VectorClient(Generic[StubT]):
         if not self.connected or self._channel is None:
             raise VectorConnectionError("Client is not connected")
 
-        effective_timeout = timeout if timeout is not None else self._default_timeout
         rpc = self._channel.unary_unary(
             path,
             request_serializer=request_serializer,
             response_deserializer=response_deserializer,
         )
+        return await self._call_unary(rpc, path, request, timeout)
+
+    async def iter_rpc(
+        self,
+        method_name: str,
+        request: Any,
+        *,
+        read_timeout: float | None = None,
+    ) -> AsyncGenerator[Any]:
+        """Read a server stream with an idle timeout and cancel it on close."""
+        method = self._get_rpc(method_name)
+        if isinstance(
+            method,
+            grpc.aio.UnaryUnaryMultiCallable
+            | grpc.aio.StreamUnaryMultiCallable
+            | grpc.aio.StreamStreamMultiCallable,
+        ):
+            raise VectorProtocolError(f"RPC '{method_name}' is not a server-streaming RPC")
+        effective_timeout = read_timeout if read_timeout is not None else self._default_timeout
+        stream = method(request)
         try:
-            return await rpc(request, timeout=effective_timeout)
+            while True:
+                response = await asyncio.wait_for(stream.read(), effective_timeout)
+                if response is grpc.aio.EOF:
+                    return
+                yield response
         except TimeoutError as err:
-            raise VectorTimeoutError(
-                f"RPC '{path}' timed out after {effective_timeout:.2f}s"
-            ) from err
+            raise VectorTimeoutError(f"RPC '{method_name}' stopped sending responses") from err
         except grpc.RpcError as err:
-            raise _map_rpc_error(err, path) from err
+            raise _map_rpc_error(err, method_name) from err
+        finally:
+            stream.cancel()
 
-    async def _maybe_sdk_initialize(self, *, timeout: float) -> None:
-        """Send SDK initialization metadata when supported by the bound stub."""
-        method = getattr(self.stub, "SDKInitialization", None)
-        if method is None:
-            return
-        if not callable(method):
-            raise VectorProtocolError("Stub attribute 'SDKInitialization' is not callable")
-
-        request = _build_sdk_initialization_request()
+    @asynccontextmanager
+    async def _duplex_rpc(
+        self,
+        method_name: str,
+        request_type: type[RequestT],
+        *,
+        timeout: float | None,
+    ) -> AsyncGenerator[DuplexStream[RequestT, Any]]:
+        method = self._get_rpc(method_name)
+        idle_timeout = self._default_timeout if timeout is None else timeout
+        call = method()
         try:
-            await method(request, timeout=timeout)
+            yield DuplexStream(call, method_name, request_type, idle_timeout)
+        finally:
+            call.cancel()
+
+    async def iter_events(
+        self,
+        request: protocol.EventRequest | None = None,
+        *,
+        read_timeout: float | None = None,
+    ) -> AsyncGenerator[protocol.Event]:
+        """Read EventStream payloads using a unique connection ID by default."""
+        event_request = protocol.EventRequest()
+        if request is not None:
+            event_request.CopyFrom(request)
+        if not event_request.connection_id:
+            event_request.connection_id = uuid4().hex
+        async with aclosing(
+            self.iter_rpc("EventStream", event_request, read_timeout=read_timeout)
+        ) as responses:
+            async for response in responses:
+                _check_response_status(response, "EventStream")
+                if response.event.WhichOneof("event_type") is not None:
+                    yield response.event
+
+    async def run_with_behavior_control(
+        self,
+        method_name: str,
+        request: Any,
+        *,
+        priority: int = protocol.ControlRequest.DEFAULT,
+        timeout: float | None = None,
+    ) -> Any:
+        """Run one unary RPC after control is granted and release control on exit."""
+        effective_timeout = timeout if timeout is not None else self._default_timeout
+        async with self._control_lock:
+            method = self._get_unary_rpc(method_name)
+            stream = self._get_rpc("BehaviorControl")()
+            command = None
+            loss = None
+            try:
+                async with asyncio.timeout(effective_timeout):
+                    await stream.write(
+                        protocol.BehaviorControlRequest(
+                            control_request=protocol.ControlRequest(priority=priority)
+                        )
+                    )
+                    await _wait_for_control(stream, granted=True)
+
+                command = asyncio.create_task(
+                    self._call_unary(method, method_name, request, timeout)
+                )
+                loss = asyncio.create_task(_wait_for_control(stream, granted=False))
+                done, _ = await asyncio.wait((command, loss), return_when=asyncio.FIRST_COMPLETED)
+                if command not in done:
+                    await loss
+                    raise VectorProtocolError("Robot revoked behavior control")
+                response = await command
+                _check_response_status(response, method_name)
+                return response
+            except TimeoutError as err:
+                raise VectorTimeoutError("Timed out waiting for robot behavior control") from err
+            except grpc.RpcError as err:
+                raise _map_rpc_error(err, "BehaviorControl") from err
+            finally:
+                if command is not None:
+                    command.cancel()
+                try:
+                    if loss is not None and not stream.done():
+                        with suppress(TimeoutError, grpc.RpcError):
+                            async with asyncio.timeout(effective_timeout):
+                                await stream.write(
+                                    protocol.BehaviorControlRequest(
+                                        control_release=protocol.ControlRelease()
+                                    )
+                                )
+                                await stream.done_writing()
+                                # Cancelling the reader before release would cancel the stream.
+                                if not loss.done():
+                                    await asyncio.wait((loss,))
+                finally:
+                    stream.cancel()
+                    if command is not None and loss is not None:
+                        loss.cancel()
+                        await asyncio.gather(command, loss, return_exceptions=True)
+
+    @staticmethod
+    async def _handshake_rpc(stub: StubT, method_name: str, request: Any, timeout: float) -> Any:
+        method = getattr(stub, method_name, None)
+        if method is None:
+            return None
+        if not callable(method):
+            raise VectorProtocolError(f"Stub attribute '{method_name}' is not callable")
+        try:
+            return await asyncio.wait_for(method(request, timeout=timeout), timeout=timeout)
         except TimeoutError as err:
-            raise VectorTimeoutError(
-                f"RPC 'SDKInitialization' timed out after {timeout:.2f}s"
-            ) from err
+            raise VectorTimeoutError(f"RPC '{method_name}' timed out after {timeout:.2f}s") from err
         except grpc.RpcError as err:
             if err.code() == grpc.StatusCode.UNIMPLEMENTED:
-                return
-            raise _map_rpc_error(err, "SDKInitialization") from err
+                return None
+            raise _map_rpc_error(err, method_name) from err
 
-    async def _maybe_protocol_handshake(self, *, timeout: float) -> None:
-        """Negotiate protocol version when supported by the bound stub."""
-        method = getattr(self.stub, "ProtocolVersion", None)
-        if method is None:
+
+async def _wait_for_control(stream: grpc.aio.StreamStreamCall, *, granted: bool) -> None:
+    while (response := await stream.read()) is not grpc.aio.EOF:
+        response_type = response.WhichOneof("response_type")
+        if granted and response_type == "control_granted_response":
             return
-        if not callable(method):
-            raise VectorProtocolError("Stub attribute 'ProtocolVersion' is not callable")
-
-        request = _build_protocol_version_request()
-        if request is None:
+        if response_type in {"control_lost_event", "reserved_control_lost_event"}:
+            if granted:
+                raise VectorProtocolError("Robot did not grant behavior control")
             return
-        try:
-            response = await method(request, timeout=timeout)
-        except TimeoutError as err:
-            raise VectorTimeoutError(
-                f"RPC 'ProtocolVersion' timed out after {timeout:.2f}s"
-            ) from err
-        except grpc.RpcError as err:
-            if err.code() == grpc.StatusCode.UNIMPLEMENTED:
-                return
-            raise _map_rpc_error(err, "ProtocolVersion") from err
-
-        # Match SDK expectation when response shape includes result enum.
-        if hasattr(response, "result") and hasattr(request, "min_host_version"):
-            result = int(getattr(response, "result", 0))
-            success = int(getattr(_messaging_protocol().ProtocolVersionResponse, "SUCCESS", 1))
-            if result != success:
-                raise VectorProtocolError("Robot rejected protocol version negotiation")
-            host_version = int(getattr(response, "host_version", 0))
-            min_host_version = int(getattr(request, "min_host_version", 0))
-            if host_version < min_host_version:
-                raise VectorProtocolError("Robot host protocol version is too old")
+    raise VectorConnectionError("Robot closed the behavior control stream")
 
 
-def _build_sdk_initialization_request() -> Any:
-    protocol = _messaging_protocol()
+def _check_response_status(response: Any, method_name: str) -> None:
+    """Raise for explicit failures in Vector's generic protobuf status."""
+    code = getattr(getattr(response, "status", None), "code", None)
+    if code == protocol.ResponseStatus.FORBIDDEN:
+        raise VectorAuthenticationError(f"Robot refused authorization for '{method_name}'")
+    if code in (
+        protocol.ResponseStatus.NOT_FOUND,
+        protocol.ResponseStatus.ERROR_UPDATE_IN_PROGRESS,
+    ):
+        status_name = protocol.ResponseStatus.StatusCode.Name(code)
+        raise VectorProtocolError(f"Robot rejected '{method_name}': {status_name}")
 
+
+def _build_sdk_initialization_request() -> protocol.SDKInitializationRequest:
+    try:
+        module_version = version("pyddlvector")
+    except PackageNotFoundError:
+        module_version = ""
     return protocol.SDKInitializationRequest(
-        sdk_module_version=_module_version(),
+        sdk_module_version=module_version,
         python_version=platform.python_version(),
         python_implementation=platform.python_implementation(),
         os_version=platform.platform(),
         cpu_version=platform.machine(),
     )
-
-
-def _module_version() -> str:
-    # Keep this non-blocking for asyncio integrations (e.g. Home Assistant).
-    return "0.1.0"
-
-
-def _build_protocol_version_request() -> Any | None:
-    protocol = _messaging_protocol()
-    if not hasattr(protocol, "ProtocolVersionRequest"):
-        return None
-    return protocol.ProtocolVersionRequest(
-        client_version=getattr(protocol, "PROTOCOL_VERSION_CURRENT", 0),
-        min_host_version=getattr(protocol, "PROTOCOL_VERSION_MINIMUM", 0),
-    )
-
-
-def _messaging_protocol() -> Any:
-    from . import messaging
-
-    return messaging.protocol
-
-
-def _map_rpc_error(
-    error: grpc.RpcError,
-    method_name: str,
-) -> VectorRPCError | VectorAuthenticationError:
-    status_code = None
-    details = None
-
-    if hasattr(error, "code"):
-        status_code = error.code()
-    if hasattr(error, "details"):
-        details = error.details()
-
-    message = f"RPC '{method_name}' failed"
-    if status_code is not None:
-        message = f"{message} with status {status_code}"
-
-    if status_code == grpc.StatusCode.UNAUTHENTICATED:
-        return VectorAuthenticationError("Authentication failed for robot RPC call")
-
-    return VectorRPCError(message, status_code=status_code, details=details)

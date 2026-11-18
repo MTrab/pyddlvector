@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .client import VectorClient
+from .client import VectorClient, _check_response_status
 from .exceptions import VectorProtocolError
 from .messaging import protocol
 
@@ -77,6 +77,7 @@ async def fetch_lifetime_statistics(
             timeout=timeout,
         )
 
+    _check_response_status(response, "PullJdocs")
     for named_jdoc in response.named_jdocs:
         if named_jdoc.jdoc_type == protocol.ROBOT_LIFETIME_STATS:
             return parse_lifetime_statistics_jdoc(named_jdoc.doc.json_doc)

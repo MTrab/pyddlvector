@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyddlvector.camera import CameraFrame, extract_camera_frame
+from pyddlvector.messaging import protocol
 
 
 def test_extract_camera_frame_returns_jpeg_frame() -> None:
@@ -27,6 +28,15 @@ def test_extract_camera_frame_rejects_non_jpeg() -> None:
         frame_time_stamp=1,
         image_id=1,
         data=b"\x00",
+    )
+
+    assert extract_camera_frame(response) is None
+
+
+def test_extract_camera_frame_rejects_minimized_jpeg() -> None:
+    response = protocol.CameraFeedResponse(
+        image_encoding=protocol.ImageChunk.JPEG_MINIMIZED_COLOR,
+        data=b"compressed data without JPEG headers",
     )
 
     assert extract_camera_frame(response) is None

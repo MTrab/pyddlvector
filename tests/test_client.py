@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from pyddlvector.exceptions import (
     VectorRPCError,
     VectorTimeoutError,
 )
+from pyddlvector.messaging import protocol
 
 
 class FakeChannel:
@@ -53,10 +56,13 @@ class FakeStub:
         request: object,
         *,
         timeout: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> protocol.ProtocolVersionResponse:
         self.protocol_request = request
         self.protocol_timeout = timeout
-        return {"ok": True}
+        return protocol.ProtocolVersionResponse(
+            result=protocol.ProtocolVersionResponse.SUCCESS,
+            host_version=protocol.PROTOCOL_VERSION_CURRENT,
+        )
 
     async def Echo(
         self,
@@ -303,3 +309,200 @@ async def test_connect_with_runtime_inline_cert(
 
     await client.connect()
     assert client.connected is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_handshake", [False, True])
+async def test_connect_and_disconnect_during_handshake(
+    monkeypatch: pytest.MonkeyPatch, robot_config: RobotConfig, cancel_handshake: bool
+) -> None:
+    handshake_started = asyncio.Event()
+    handshake_can_finish = asyncio.Event()
+    channels = []
+
+    class PendingStub(FakeStub):
+        async def ProtocolVersion(self, request, *, timeout):
+            handshake_started.set()
+            await handshake_can_finish.wait()
+            return await super().ProtocolVersion(request, timeout=timeout)
+
+    def open_channel(*args, **kwargs):
+        channels.append(FakeChannel())
+        return channels[-1]
+
+    _patch_grpc(monkeypatch, FakeChannel())
+    monkeypatch.setattr(grpc.aio, "secure_channel", open_channel)
+    client = VectorClient(robot_config, stub_factory=lambda channel: PendingStub())
+    first = asyncio.create_task(client.connect())
+    await handshake_started.wait()
+    second = asyncio.create_task(client.connect())
+    close = asyncio.create_task(client.disconnect())
+    await asyncio.sleep(0)
+    assert not client.connected
+    assert len(channels) == 1
+
+    if cancel_handshake:
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+    handshake_can_finish.set()
+    await asyncio.gather(second, close)
+    if not cancel_handshake:
+        await first
+    assert not client.connected
+    assert len(channels) == (2 if cancel_handshake else 1)
+    assert all(channel.closed for channel in channels)
+
+
+@pytest.mark.asyncio
+async def test_failed_stub_construction_closes_channel(
+    monkeypatch: pytest.MonkeyPatch, robot_config: RobotConfig
+) -> None:
+    def broken_stub(channel):
+        raise RuntimeError("stub failed")
+
+    channel = FakeChannel()
+    _patch_grpc(monkeypatch, channel)
+    client = VectorClient(robot_config, stub_factory=broken_stub)
+    with pytest.raises(RuntimeError, match="stub failed"):
+        await client.connect()
+    assert channel.closed
+    assert not client.connected
+
+
+@pytest.mark.asyncio
+async def test_event_stream_preserves_filter_and_sets_unique_id(
+    monkeypatch: pytest.MonkeyPatch, robot_config: RobotConfig
+) -> None:
+    class EventStream:
+        closed = False
+
+        def __init__(self):
+            self.responses = iter(
+                [
+                    protocol.EventResponse(),
+                    protocol.EventResponse(event=protocol.Event(robot_state=protocol.RobotState())),
+                    grpc.aio.EOF,
+                ]
+            )
+
+        async def read(self):
+            return next(self.responses)
+
+        def cancel(self):
+            self.closed = True
+
+    class EventStub(FakeStub):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+            self.streams = []
+
+        def EventStream(self, request):
+            self.requests.append(request)
+            self.streams.append(EventStream())
+            return self.streams[-1]
+
+    _patch_grpc(monkeypatch, FakeChannel())
+    stub = EventStub()
+    client = VectorClient(robot_config, stub_factory=lambda channel: stub)
+    await client.connect()
+    request = protocol.EventRequest(white_list=protocol.FilterList(list=["robot_state"]))
+
+    async with aclosing(client.iter_events(request)) as events:
+        assert (await anext(events)).WhichOneof("event_type") == "robot_state"
+    assert len([event async for event in client.iter_events(request)]) == 1
+
+    assert request.connection_id == ""
+    assert stub.requests[0].white_list == request.white_list
+    assert stub.requests[0].connection_id
+    assert stub.requests[0].connection_id != stub.requests[1].connection_id
+    assert all(stream.closed for stream in stub.streams)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "revoked", "cancelled"])
+async def test_behavior_control_releases_after_command_or_control_loss(
+    monkeypatch: pytest.MonkeyPatch, robot_config: RobotConfig, outcome: str
+) -> None:
+    command_started = asyncio.Event()
+    command_finished = asyncio.Event()
+    command_stopped = asyncio.Event()
+
+    class ControlStream:
+        closed = False
+
+        def __init__(self):
+            self.requests = []
+            self.responses = asyncio.Queue()
+
+        async def write(self, request):
+            self.requests.append(request.WhichOneof("request_type"))
+            if self.requests == ["control_request"]:
+                self.responses.put_nowait(
+                    protocol.BehaviorControlResponse(keep_alive=protocol.KeepAlivePing())
+                )
+                self.responses.put_nowait(
+                    protocol.BehaviorControlResponse(
+                        control_granted_response=protocol.ControlGrantedResponse()
+                    )
+                )
+            else:
+                self.revoke()
+
+        def revoke(self):
+            self.responses.put_nowait(
+                protocol.BehaviorControlResponse(control_lost_event=protocol.ControlLostResponse())
+            )
+
+        async def read(self):
+            return await self.responses.get()
+
+        async def done_writing(self):
+            pass
+
+        def done(self):
+            return self.closed
+
+        def cancel(self):
+            self.closed = True
+
+    class ControlStub(FakeStub):
+        stream = ControlStream()
+
+        def BehaviorControl(self):
+            return self.stream
+
+        async def SayText(self, request, *, timeout):
+            command_started.set()
+            try:
+                await command_finished.wait()
+                return protocol.SayTextResponse()
+            finally:
+                command_stopped.set()
+
+    _patch_grpc(monkeypatch, FakeChannel())
+    stub = ControlStub()
+    client = VectorClient(robot_config, stub_factory=lambda channel: stub)
+    await client.connect()
+    command = asyncio.create_task(
+        client.run_with_behavior_control("SayText", protocol.SayTextRequest(text="test"))
+    )
+    await command_started.wait()
+
+    if outcome == "revoked":
+        stub.stream.revoke()
+        with pytest.raises(VectorProtocolError, match="revoked"):
+            await command
+    elif outcome == "cancelled":
+        command.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await command
+    else:
+        command_finished.set()
+        assert await command == protocol.SayTextResponse()
+
+    assert command_stopped.is_set()
+    assert stub.stream.requests == ["control_request", "control_release"]
+    assert stub.stream.closed

@@ -8,6 +8,7 @@ from pyddlvector.exceptions import (
     VectorAuthenticationError,
     VectorProvisioningError,
 )
+from pyddlvector.messaging import protocol
 from pyddlvector.provisioning import (
     authenticate_robot_guid,
     derive_name_from_cert,
@@ -336,3 +337,29 @@ async def test_provision_runtime_robot_derives_name_when_missing(
     assert captured_kwargs["name"] == "Vector-Autodiscovered"
     assert config.name == "Vector-Autodiscovered"
     assert config.guid == "guid-from-rpc"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_robot_guid_rejects_unauthorized_response_with_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnauthorizedStub:
+        async def UserAuthentication(self, request, *, timeout):
+            return protocol.UserAuthenticationResponse(
+                code=protocol.UserAuthenticationResponse.UNAUTHORIZED,
+                client_token_guid=b"ignored",
+            )
+
+    channel = _FakeChannel()
+    _patch_grpc(monkeypatch, channel)
+    with pytest.raises(VectorAuthenticationError, match="denied"):
+        await authenticate_robot_guid(
+            ip="192.168.1.201",
+            name="Vector-T3X9",
+            cert_pem=b"cert",
+            user_session_id="session",
+            stub_factory=lambda ch: UnauthorizedStub(),
+            request_factory=lambda session, name: None,
+        )
+
+    assert channel.closed

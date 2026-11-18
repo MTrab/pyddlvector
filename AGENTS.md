@@ -99,7 +99,6 @@ The agent must NOT:
 
 - Commit credentials, certificates, or tokens
 - Log secrets in plaintext
-- Bypass TLS/certificate validation for convenience
 - Introduce undocumented external endpoints
 
 Any required endpoints and auth assumptions must be documented.

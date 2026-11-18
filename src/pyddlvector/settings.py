@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import struct
 from dataclasses import dataclass
 from typing import Any
 
-from .client import VectorClient
+import grpc
+
+from .client import VectorClient, _check_response_status
 from .exceptions import VectorProtocolError, VectorRPCError
 from .messaging import protocol
 
@@ -90,7 +91,7 @@ def _parse_master_volume_from_robot_settings_jdoc(raw_json: str) -> str:
     except json.JSONDecodeError as err:
         raise VectorProtocolError("Robot settings jdoc is not valid JSON") from err
 
-    if "master_volume" not in payload:
+    if not isinstance(payload, dict) or "master_volume" not in payload:
         raise VectorProtocolError("Robot settings jdoc is missing master_volume")
 
     raw_value = payload["master_volume"]
@@ -104,7 +105,7 @@ def _parse_master_volume_from_robot_settings_jdoc(raw_json: str) -> str:
                 candidate = candidate[len("VOLUME_") :]
             return normalize_master_volume(candidate)
 
-    if isinstance(raw_value, int):
+    if type(raw_value) is int:
         try:
             return normalize_master_volume(protocol.Volume.Name(raw_value))
         except ValueError as err:
@@ -121,7 +122,7 @@ def _parse_eye_color_from_robot_settings_jdoc(raw_json: str) -> RobotEyeColor:
     except json.JSONDecodeError as err:
         raise VectorProtocolError("Robot settings jdoc is not valid JSON") from err
 
-    if "eye_color" not in payload:
+    if not isinstance(payload, dict) or "eye_color" not in payload:
         raise VectorProtocolError("Robot settings jdoc is missing eye_color")
 
     raw_value = payload["eye_color"]
@@ -136,7 +137,7 @@ def _parse_eye_color_from_robot_settings_jdoc(raw_json: str) -> RobotEyeColor:
             preset = normalize_eye_color_preset(candidate)
             return _parse_custom_eye_color(payload, preset)
 
-    if isinstance(raw_value, int):
+    if type(raw_value) is int:
         try:
             enum_name = protocol.EyeColor.Name(raw_value)
         except ValueError as err:
@@ -159,7 +160,7 @@ def _parse_custom_eye_color(payload: dict[str, Any], preset: str) -> RobotEyeCol
             custom_saturation=None,
         )
 
-    enabled = bool(custom_payload.get("enabled", False))
+    enabled = custom_payload.get("enabled") is True
     if not enabled:
         return RobotEyeColor(
             preset=preset,
@@ -214,6 +215,7 @@ async def fetch_master_volume(
             timeout=timeout,
         )
 
+    _check_response_status(response, "PullJdocs")
     for named_jdoc in response.named_jdocs:
         if named_jdoc.jdoc_type == protocol.ROBOT_SETTINGS:
             return _parse_master_volume_from_robot_settings_jdoc(named_jdoc.doc.json_doc)
@@ -240,6 +242,7 @@ async def fetch_eye_color(
             timeout=timeout,
         )
 
+    _check_response_status(response, "PullJdocs")
     for named_jdoc in response.named_jdocs:
         if named_jdoc.jdoc_type == protocol.ROBOT_SETTINGS:
             return _parse_eye_color_from_robot_settings_jdoc(named_jdoc.doc.json_doc)
@@ -259,16 +262,11 @@ async def update_master_volume(
     if normalized == "mute":
         return await _update_master_volume_via_update_settings(client, normalized, timeout=timeout)
 
-    try:
-        return await _update_master_volume_via_set_master_volume(
-            client,
-            normalized,
-            timeout=timeout,
-        )
-    except (VectorProtocolError, VectorRPCError) as err:
-        if not _should_fallback_to_update_settings(err):
-            raise
-        return await _update_master_volume_via_update_settings(client, normalized, timeout=timeout)
+    return await _update_master_volume_via_set_master_volume(
+        client,
+        normalized,
+        timeout=timeout,
+    )
 
 
 async def _update_master_volume_via_set_master_volume(
@@ -280,7 +278,13 @@ async def _update_master_volume_via_set_master_volume(
     request = protocol.MasterVolumeRequest(
         volume_level=protocol.MasterVolumeLevel.Value(f"VOLUME_{normalized.upper()}"),
     )
-    await client.rpc("SetMasterVolume", request, timeout=timeout)
+    try:
+        response = await client.rpc("SetMasterVolume", request, timeout=timeout)
+    except (VectorProtocolError, VectorRPCError) as err:
+        if not _rpc_is_unavailable(err):
+            raise
+        return await _update_master_volume_via_update_settings(client, normalized, timeout=timeout)
+    _check_response_status(response, "SetMasterVolume")
     return normalized
 
 
@@ -294,18 +298,17 @@ async def update_eye_color_preset(
     normalized = normalize_eye_color_preset(value)
     enum_value = int(protocol.EyeColor.Value(_EYE_COLOR_PRESET_TO_ENUM[normalized]))
 
-    response = await _call_update_settings_until_accepted(
+    await _call_update_settings_until_accepted(
         client,
-        protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
+        protocol.UpdateSettingsRequest(
+            settings=protocol.RobotSettingsConfig(
+                eye_color=enum_value,
+                custom_eye_color=protocol.CustomEyeColor(),
+            )
+        ),
         timeout=timeout,
         error_prefix="Eye color preset update was not accepted by robot",
-        send_update_settings=_build_update_settings_eye_color_preset_sender(enum_value),
     )
-    if response is None:
-        raise VectorProtocolError(
-            "Eye color preset update did not return a response payload"
-        )
-
     return normalized
 
 
@@ -325,29 +328,31 @@ async def update_custom_eye_color(
     normalized_hue = float(hue)
     normalized_saturation = float(saturation)
 
+    request = protocol.UpdateSettingsRequest(
+        settings=protocol.RobotSettingsConfig(
+            custom_eye_color=protocol.CustomEyeColor(
+                hue=normalized_hue,
+                saturation=normalized_saturation,
+                enabled=True,
+            )
+        )
+    )
     try:
-        response = await _call_update_settings_until_accepted(
+        await _call_update_settings_until_accepted(
             client,
-            protocol.UpdateSettingsRequest(settings=protocol.RobotSettingsConfig()),
+            request,
             timeout=timeout,
             error_prefix="Custom eye color update was not accepted by robot",
-            send_update_settings=_build_update_settings_custom_eye_color_sender(
-                normalized_hue,
-                normalized_saturation,
-            ),
         )
-        if response is None:
-            raise VectorProtocolError(
-                "Custom eye color update did not return a response payload"
-            )
-    except (VectorProtocolError, VectorRPCError) as err:
-        if not _should_fallback_to_update_settings_path(err):
+    except VectorRPCError as err:
+        if err.status_code != grpc.StatusCode.UNIMPLEMENTED:
             raise
         request = protocol.SetEyeColorRequest(
             hue=normalized_hue,
             saturation=normalized_saturation,
         )
-        await _call_set_eye_color(client, request, timeout=timeout)
+        response = await _call_set_eye_color(client, request, timeout=timeout)
+        _check_response_status(response, "SetEyeColor")
     return normalized_hue, normalized_saturation
 
 
@@ -362,24 +367,14 @@ async def _update_master_volume_via_update_settings(
             master_volume=protocol.Volume.Value(normalized.upper()),
         )
     )
-    response = await _call_update_settings_until_accepted(
+    await _call_update_settings_until_accepted(
         client,
         request,
         timeout=timeout,
         error_prefix="Volume update was not accepted by robot",
     )
-    if response is None:
-        raise VectorProtocolError("Volume update did not return a response payload")
 
     return normalized
-
-
-def _should_fallback_to_update_settings(err: VectorProtocolError | VectorRPCError) -> bool:
-    if isinstance(err, VectorProtocolError):
-        return True
-
-    status_code = getattr(err, "status_code", None)
-    return str(status_code) == "StatusCode.UNIMPLEMENTED"
 
 
 async def _call_update_settings(
@@ -391,9 +386,9 @@ async def _call_update_settings(
     if hasattr(client, "rpc"):
         try:
             return await client.rpc("UpdateSettings", request, timeout=timeout)
-        except (VectorProtocolError, VectorRPCError) as err:
-            if not _should_fallback_to_update_settings_path(err):
-                raise
+        except VectorProtocolError:
+            # Older stubs may omit the method even when the robot exposes it.
+            pass
     return await client.unary_unary(
         _UPDATE_SETTINGS_PATH,
         request,
@@ -403,149 +398,36 @@ async def _call_update_settings(
     )
 
 
-def _should_fallback_to_update_settings_path(
-    err: VectorProtocolError | VectorRPCError,
-) -> bool:
-    if isinstance(err, VectorProtocolError):
-        return True
-    status_code = getattr(err, "status_code", None)
-    return str(status_code) == "StatusCode.UNIMPLEMENTED"
+def _rpc_is_unavailable(err: VectorProtocolError | VectorRPCError) -> bool:
+    return isinstance(err, VectorProtocolError) or err.status_code == grpc.StatusCode.UNIMPLEMENTED
 
 
 async def _call_update_settings_until_accepted(
     client: VectorClient[Any],
-    request: Any,
+    request: protocol.UpdateSettingsRequest,
     *,
     timeout: float | None,
     error_prefix: str,
-    send_update_settings: Any | None = None,
-) -> Any:
-    sender = send_update_settings or _call_update_settings
-    accepted = protocol.ResultCode.Value("SETTINGS_ACCEPTED")
-    update_in_progress = protocol.ResultCode.Value("ERROR_UPDATE_IN_PROGRESS")
-
+) -> None:
     for attempt in range(1, _UPDATE_SETTINGS_MAX_ATTEMPTS + 1):
-        response = await sender(client, request, timeout=timeout)
-        response_code = getattr(response, "code", None)
-        if response_code is None:
-            return response
+        response = await _call_update_settings(client, request, timeout=timeout)
+        if response is None:
+            raise VectorProtocolError(f"{error_prefix}: missing response")
 
-        numeric_code = int(response_code)
-        if numeric_code == accepted:
-            return response
-
+        status = getattr(getattr(response, "status", None), "code", None)
+        code = getattr(response, "code", None)
         if (
-            numeric_code == update_in_progress
-            and attempt < _UPDATE_SETTINGS_MAX_ATTEMPTS
+            code == protocol.ResultCode.ERROR_UPDATE_IN_PROGRESS
+            or status == protocol.ResponseStatus.ERROR_UPDATE_IN_PROGRESS
         ):
-            await asyncio.sleep(_UPDATE_SETTINGS_RETRY_DELAY_SECONDS * attempt)
-            continue
+            if attempt < _UPDATE_SETTINGS_MAX_ATTEMPTS:
+                await asyncio.sleep(_UPDATE_SETTINGS_RETRY_DELAY_SECONDS * attempt)
+                continue
 
-        raise VectorProtocolError(f"{error_prefix}: code={response_code}")
-
-    raise VectorProtocolError(f"{error_prefix}: exhausted retries")
-
-
-def _build_update_settings_eye_color_preset_sender(eye_color_enum_value: int):
-    payload = _serialize_update_settings_eye_color_preset(eye_color_enum_value)
-
-    async def _send(client: VectorClient[Any], request: Any, *, timeout: float | None = None):
-        return await client.unary_unary(
-            _UPDATE_SETTINGS_PATH,
-            request,
-            request_serializer=lambda _request: payload,
-            response_deserializer=protocol.UpdateSettingsResponse.FromString,
-            timeout=timeout,
-        )
-
-    return _send
-
-
-def _serialize_update_settings_eye_color_preset(eye_color_enum_value: int) -> bytes:
-    # Match wire-pod preset behavior by setting both eye_color and
-    # custom_eye_color (empty message) to disable custom mode.
-    settings_payload = b"".join(
-        (
-            _encode_key(2, 0),
-            _encode_varint(eye_color_enum_value),
-            _encode_key(3, 2),
-            b"\x00",
-        )
-    )
-    return b"".join(
-        (
-            _encode_key(1, 2),
-            _encode_varint(len(settings_payload)),
-            settings_payload,
-        )
-    )
-
-
-def _build_update_settings_custom_eye_color_sender(
-    hue: float,
-    saturation: float,
-):
-    payload = _serialize_update_settings_custom_eye_color(hue, saturation)
-
-    async def _send(client: VectorClient[Any], request: Any, *, timeout: float | None = None):
-        return await client.unary_unary(
-            _UPDATE_SETTINGS_PATH,
-            request,
-            request_serializer=lambda _request: payload,
-            response_deserializer=protocol.UpdateSettingsResponse.FromString,
-            timeout=timeout,
-        )
-
-    return _send
-
-
-def _serialize_update_settings_custom_eye_color(hue: float, saturation: float) -> bytes:
-    # UpdateSettingsRequest.settings.custom_eye_color where custom_eye_color uses:
-    # hue fixed32 field 1, saturation fixed32 field 2, enabled varint field 3.
-    custom_eye_color_payload = b"".join(
-        (
-            _encode_key(1, 5),
-            struct.pack("<f", float(hue)),
-            _encode_key(2, 5),
-            struct.pack("<f", float(saturation)),
-            _encode_key(3, 0),
-            b"\x01",
-        )
-    )
-    settings_payload = b"".join(
-        (
-            _encode_key(3, 2),
-            _encode_varint(len(custom_eye_color_payload)),
-            custom_eye_color_payload,
-        )
-    )
-    return b"".join(
-        (
-            _encode_key(1, 2),
-            _encode_varint(len(settings_payload)),
-            settings_payload,
-        )
-    )
-
-
-def _encode_key(field_number: int, wire_type: int) -> bytes:
-    return _encode_varint((field_number << 3) | wire_type)
-
-
-def _encode_varint(value: int) -> bytes:
-    if value < 0:
-        raise ValueError("Varint encoder only supports non-negative integers")
-
-    encoded = bytearray()
-    remaining = value
-    while True:
-        to_write = remaining & 0x7F
-        remaining >>= 7
-        if remaining:
-            encoded.append(to_write | 0x80)
-        else:
-            encoded.append(to_write)
-            return bytes(encoded)
+        _check_response_status(response, "UpdateSettings")
+        if code == protocol.ResultCode.SETTINGS_ACCEPTED:
+            return
+        raise VectorProtocolError(f"{error_prefix}: code={code}")
 
 
 async def _call_set_eye_color(
@@ -557,9 +439,9 @@ async def _call_set_eye_color(
     if hasattr(client, "rpc"):
         try:
             return await client.rpc("SetEyeColor", request, timeout=timeout)
-        except (VectorProtocolError, VectorRPCError) as err:
-            if not _should_fallback_to_update_settings_path(err):
-                raise
+        except VectorProtocolError:
+            # Older stubs may omit the method even when the robot exposes it.
+            pass
     return await client.unary_unary(
         _SET_EYE_COLOR_PATH,
         request,
