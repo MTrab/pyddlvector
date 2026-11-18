@@ -19,6 +19,9 @@ Async-first Python communication module for Digital Dream Labs / Anki Vector.
 - Tests: `pytest`, `pytest-asyncio`
 - Lint/format: `ruff`
 
+The runtime supports Protobuf 5.29.3 through 7.x. Pillow is a development
+dependency used by the NavMap HTTP example for JPEG output.
+
 ## Installation
 
 ### From source (development)
